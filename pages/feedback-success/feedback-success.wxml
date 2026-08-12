@@ -1,0 +1,6 @@
+<view class="page">
+  <view class="icon">✓</view>
+  <text class="title">反馈提交成功</text>
+  <text class="sub">感谢您的意见与建议，我们会认真查看。</text>
+  <button class="btn" bindtap="goHome">返回首页</button>
+</view>

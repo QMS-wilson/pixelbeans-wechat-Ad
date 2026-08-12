@@ -1,0 +1,353 @@
+<view class="page {{overlayOpen ? 'overlay-open' : ''}}">
+  <view class="site-header">
+    <view class="brand">
+      <view class="brand-mark">PX</view>
+      <view class="brand-text">
+        <text class="brand-name">像素工坊</text>
+        <text class="brand-sub">Bead Pattern Lab</text>
+      </view>
+    </view>
+    <view class="header-access {{paidAccess ? 'paid' : ''}}" bindtap="openCardModal">{{accessStatusText}}</view>
+  </view>
+
+  <view class="section-shell tool-card">
+    <view class="tool-topbar">
+      <view class="tool-title">Pattern Lab</view>
+      <view class="tool-actions">
+        <view class="topbar-btn" wx:if="{{sourceType !== 'none'}}" bindtap="chooseImage">更换图片</view>
+        <view class="topbar-btn" wx:if="{{sourceType === 'none'}}" bindtap="loadDemoPattern">示例图片</view>
+        <view class="topbar-btn" bindtap="createBlankBoard">空白画布</view>
+        <view class="topbar-ai-wrap {{showAiHint ? 'ai-hint-glow' : ''}}">
+          <view class="topbar-btn" bindtap="togglePreprocessPanel">AI优化</view>
+          <view class="ai-hint" wx:if="{{showAiHint}}" bindtap="onAiHintTap">
+            <view class="ai-hint-arrow"></view>
+            <text>可使用AI优化试试哦~</text>
+          </view>
+        </view>
+      </view>
+      <text class="status-text {{statusState}}" id="statusText">{{statusText}}</text>
+    </view>
+
+    <view class="upload-hint" wx:if="{{sourceType === 'none'}}" bindtap="chooseImage">
+      <view class="upload-plus">+</view>
+      <text class="upload-title">{{uploadTitle}}</text>
+      <text class="upload-sub">{{uploadHint}}</text>
+    </view>
+
+    <view class="canvas-panel {{paidAccess ? '' : 'preview-protected'}}">
+      <view class="canvas-frame">
+        <canvas
+          type="2d"
+          id="previewCanvas"
+          class="preview-canvas"
+          bindtouchstart="onPaintStart"
+          bindtouchmove="onPaintMove"
+          bindtouchend="onPaintEnd"
+          bindtouchcancel="onPaintEnd"
+          disable-scroll="{{true}}"
+        ></canvas>
+      </view>
+      <view class="canvas-hint">{{canvasHint}}</view>
+    </view>
+
+    <view class="compare-panel">
+      <view class="compare-header" bindtap="toggleComparePanel">
+        <text class="compare-header-title">原图与预处理图</text>
+        <text class="compare-arrow {{compareExpanded ? 'open' : ''}}">▾</text>
+      </view>
+      <view class="compare-body {{compareExpanded ? '' : 'collapsed'}} {{compareExpanding ? 'expanding' : ''}} {{compareCollapsing ? 'collapsing' : ''}}">
+        <view class="compare-item">
+          <text class="compare-label">原图</text>
+          <canvas type="2d" id="sourcePreviewCanvas" class="thumb-canvas"></canvas>
+        </view>
+        <view class="compare-item">
+          <text class="compare-label">{{processedPreviewLabel}}</text>
+          <canvas type="2d" id="processedPreviewCanvas" class="thumb-canvas"></canvas>
+        </view>
+      </view>
+    </view>
+
+    <view class="control-panel">
+      <view class="control-row slider-row">
+        <view class="control-head">
+          <text>横向格数</text>
+          <text class="control-value">{{gridSize}}</text>
+        </view>
+        <slider
+          min="10"
+          max="220"
+          step="1"
+          value="{{gridSize}}"
+          activeColor="#3157d5"
+          backgroundColor="#e2e8f0"
+          block-size="20"
+          block-color="#ffffff"
+          bindchanging="onGridChanging"
+          bindchange="onGridChange"
+        />
+      </view>
+
+      <view class="control-row slider-row">
+        <view class="control-head">
+          <text>颜色合并</text>
+          <text class="control-value">{{mergeLevel}}</text>
+        </view>
+        <slider
+          min="0"
+          max="60"
+          step="1"
+          value="{{mergeLevel}}"
+          activeColor="#3157d5"
+          backgroundColor="#e2e8f0"
+          block-size="20"
+          block-color="#ffffff"
+          bindchange="onMergeChange"
+        />
+      </view>
+
+      <view class="control-row switch-row">
+        <text>显示网格线</text>
+        <switch checked="{{gridLineOn}}" color="#3157d5" bindchange="onGridLineChange" />
+      </view>
+
+      <view class="control-row">
+        <text>拼豆色板</text>
+        <picker range="{{paletteOptions}}" range-key="label" value="{{paletteIndex}}" bindchange="onPaletteChange">
+          <view class="picker-value">{{paletteLabel}} ▾</view>
+        </picker>
+      </view>
+
+      <view class="editor-panel">
+        <view class="editor-head">
+          <text class="editor-title">手绘编辑</text>
+          <text class="editor-mode">{{editorModeText}}</text>
+        </view>
+        <view class="editor-toolbar">
+          <view class="editor-tool {{editorTool === 'brush' ? 'active' : 'secondary'}}" bindtap="setBrush">画笔</view>
+          <view class="editor-tool {{editorTool === 'eraser' ? 'active' : 'secondary'}}" bindtap="setEraser">橡皮</view>
+<view class="editor-tool secondary {{historyEmpty ? 'disabled' : ''}}" bindtap="undoEdit">撤销</view>
+<view class="editor-tool secondary {{redoEmpty ? 'disabled' : ''}}" bindtap="redoEdit">重做</view>
+<view class="editor-tool secondary {{cellsEmpty ? 'disabled' : ''}}" bindtap="clearBoard">清空</view>
+<view class="editor-tool-wrap {{showClearHint ? 'clear-hint-glow' : ''}}">
+  <view class="editor-tool secondary {{cellsEmpty ? 'disabled' : ''}}" bindtap="clearSavedPattern">清除存档</view>
+  <view class="clear-hint" wx:if="{{showClearHint}}" bindtap="clearSavedPattern">
+    <view class="clear-hint-arrow"></view>
+    <text>清除当前图片重新上传</text>
+  </view>
+</view>
+<view class="editor-tool secondary" bindtap="openProjectLibrary">项目库</view>
+        </view>
+        <view class="editor-active">
+          <view class="active-chip" style="background: {{activeColorHex}}"></view>
+          <text>{{activeColorText}}</text>
+          <text class="palette-scroll-hint">—>向右滑动</text>
+        </view>
+        <scroll-view class="palette-filter-bar" scroll-x enable-flex>
+          <view
+            wx:for="{{paletteFilters}}"
+            wx:key="*this"
+            class="palette-filter-chip {{paletteFilter === item ? 'active' : ''}}"
+            data-family="{{item}}"
+            bindtap="onPaletteFilterTap"
+          >{{item}}</view>
+        </scroll-view>
+        <scroll-view class="editor-palette" scroll-x enable-flex>
+          <view
+            wx:for="{{paletteSwatches}}"
+            wx:key="code"
+            class="palette-swatch {{item.active ? 'active' : ''}}"
+            style="background: {{item.hex}}"
+            data-code="{{item.code}}"
+            bindtap="onSelectColor"
+          >
+            <text class="swatch-code">{{item.code}}</text>
+          </view>
+        </scroll-view>
+      </view>
+
+      <view class="control-note">{{controlNote}}</view>
+
+      <view class="actions">
+        <button class="action-btn primary" disabled="{{exportBusy || cellsEmpty || (paidAccess && downloadRemaining <= 0)}}" bindtap="exportCodePng">下载带 Code 图纸</button>
+        <button class="action-btn secondary" disabled="{{exportBusy || cellsEmpty || (paidAccess && downloadRemaining <= 0)}}" bindtap="exportCleanPng">下载无 Code 图纸</button>
+        <button class="action-btn secondary" disabled="{{exportBusy || cellsEmpty || (paidAccess && downloadRemaining <= 0)}}" bindtap="exportCsvTap">下载 CSV 清单</button>
+      </view>
+    </view>
+  </view>
+
+  <view class="section-shell stats-section">
+    <view class="stats-head">
+      <text class="stats-title">颜色清单</text>
+      <text class="stats-total">{{totalBeads}}</text>
+    </view>
+    <button class="action-btn secondary copy-list-btn" bindtap="copyPaletteList" disabled="{{!paletteList.length}}">复制色号清单</button>
+    <view class="palette-list" wx:if="{{paletteList.length}}">
+      <view wx:for="{{paletteList}}" wx:key="code" class="palette-row">
+        <view class="row-swatch" style="background: {{item.hex}}"></view>
+        <text class="row-code">{{item.code}}</text>
+        <text class="row-hex">{{item.label ? item.label + ' · ' : ''}}{{item.hex}}</text>
+        <text class="row-count">{{item.count}}</text>
+      </view>
+    </view>
+    <view class="empty-state" wx:else>暂无色号统计，上传图片或开始绘制后显示。</view>
+  </view>
+
+  <view class="section-shell membership">
+    <view class="membership-head">
+      <text class="membership-title">卡密兑换</text>
+      <text class="membership-sub">{{paymentUsageSummary}}</text>
+    </view>
+    <view class="membership-card" bindtap="openCardModal">
+      <text>{{accessStatusBadge}}</text>
+      <text class="membership-action">{{paidAccess ? '查看授权状态' : '立即解锁下载'}}</text>
+    </view>
+  </view>
+
+  <view class="section-shell feedback-section">
+    <view class="membership-head">
+      <text class="membership-title">意见反馈</text>
+      <text class="membership-sub">欢迎提出您宝贵的建议</text>
+    </view>
+    <textarea
+      class="feedback-input"
+      value="{{feedbackInput}}"
+      bindinput="onFeedbackInput"
+      placeholder="请输入您的意见或建议"
+      maxlength="1000"
+      auto-height
+    />
+    <button class="action-btn primary feedback-submit" bindtap="submitFeedback">提交</button>
+  </view>
+
+  <view class="overlay ai-overlay" wx:if="{{aiOverlayVisible}}">
+    <view class="overlay-card">
+      <view class="spinner"></view>
+      <text class="overlay-title">图片正在 AI 优化中</text>
+      <text class="overlay-sub">请稍候，系统正在根据已确认的提示词处理图片。</text>
+      <text class="ai-wait-text">{{aiWaitText}}</text>
+      <button class="action-btn secondary cancel-ai-btn" bindtap="cancelAiOptimization">取消本次优化</button>
+    </view>
+  </view>
+
+  <!-- 导出进度浮层：indeterminate 时显示转圈+滑动条动画（服务端处理中），否则显示百分比进度条 -->
+  <view class="overlay export-progress-overlay" wx:if="{{exportProgressVisible}}">
+    <view class="overlay-card export-progress-card">
+      <view class="spinner" wx:if="{{exportProgressIndeterminate}}"></view>
+      <text class="export-progress-percent" wx:else>{{exportProgressPercent}}%</text>
+      <text class="overlay-title">正在导出图纸</text>
+      <text class="overlay-sub">{{exportStageText}}</text>
+      <view class="progress-track">
+        <view wx:if="{{exportProgressIndeterminate}}" class="progress-slider"></view>
+        <progress wx:else class="progress-bar" percent="{{exportProgressPercent}}" stroke-width="6" activeColor="#3157d5" backgroundColor="#eef2f7" border-radius="8" active />
+      </view>
+      <text class="progress-hint">大图导出需要一些时间，请勿关闭页面</text>
+    </view>
+  </view>
+  <view class="overlay preprocess-overlay" wx:if="{{preprocessVisible}}" bindtap="togglePreprocessPanel">
+    <view class="modal-card" catchtap="noop">
+      <view class="modal-head">
+        <text class="modal-title">预处理增强</text>
+        <text class="modal-close" bindtap="togglePreprocessPanel">×</text>
+      </view>
+      <view class="modal-row">
+        <text>AI 优化</text>
+        <switch checked="{{aiOptimizeOn}}" color="#3157d5" bindchange="onAiOptimizeChange" />
+      </view>
+      <picker
+        range="{{aiPromptPresets}}"
+        range-key="label"
+        value="{{aiPromptPresetIndex}}"
+        bindchange="onAiPromptPresetChange"
+        disabled="{{!aiOptimizeOn}}"
+      >
+        <view class="picker-value preset-picker">快捷风格模板 ▾</view>
+      </picker>
+      <textarea
+        class="prompt-input"
+        value="{{aiPrompt}}"
+        maxlength="-1"
+        disabled="{{!aiOptimizeOn}}"
+        placeholder="输入 AI 提示词"
+        bindinput="onPromptInput"
+      />
+      <button class="action-btn secondary" disabled="{{!aiOptimizeOn}}" bindtap="confirmAiPrompt">确认提示词</button>
+    </view>
+  </view>
+
+  <view class="overlay card-overlay" wx:if="{{cardModalVisible}}" bindtap="closeCardModal">
+    <view class="modal-card" catchtap="noop">
+      <view class="modal-head">
+        <text class="modal-title">解锁下载图纸结果</text>
+        <text class="modal-close" bindtap="closeCardModal">×</text>
+      </view>
+      <text class="card-modal-badge">{{accessStatusBadgeModal}}</text>
+      <view class="card-benefits">
+        <text>✓ 带 Code 图纸下载</text>
+        <text>✓ 无 Code 图纸下载</text>
+        <text>✓ CSV 清单下载</text>
+      </view>
+      <input
+        class="card-input"
+        value="{{cardCodeInput}}"
+        placeholder="例如 PB-ABCD-EFGH-JKLM"
+        bindinput="onCardCodeInput"
+      />
+      <view class="card-actions">
+        <button class="action-btn primary" disabled="{{redeemDisabled}}" bindtap="redeemCard">
+          {{paidAccess ? '已完成解锁' : '立即解锁下载'}}
+        </button>
+        <button class="action-btn secondary" wx:if="{{paidAccess}}" bindtap="logoutAccess">退出当前授权</button>
+        <button class="action-btn ghost" bindtap="closeCardModal">稍后再说</button>
+      </view>
+      <text class="redeem-message {{redeemMessageType}}">{{cardRedeemMessage}}</text>
+    </view>
+  </view>
+
+  <view class="overlay card-overlay" wx:if="{{projectModalVisible}}" bindtap="closeProjectLibrary">
+    <view class="modal-card" catchtap="noop">
+      <view class="modal-head">
+        <text class="modal-title">项目库</text>
+        <text class="modal-close" bindtap="closeProjectLibrary">×</text>
+      </view>
+      <view class="project-form-row">
+        <input class="project-name-input" value="{{projectName}}" placeholder="项目名称，例如：小猫挂件" bindinput="onProjectNameInput" />
+        <button class="action-btn project-save-btn" bindtap="saveProjectFromLibrary">保存当前</button>
+      </view>
+      <scroll-view class="project-scroll" scroll-y>
+        <view class="project-item" wx:for="{{projects}}" wx:key="id">
+          <view class="project-item-info">
+            <text class="project-item-name">{{item.name}}</text>
+            <text class="project-item-meta">{{item.fileID ? '云端' : '仅本地'}} · {{item.cols}}x{{item.rows}} · {{item.savedAtText}}</text>
+          </view>
+          <view class="project-item-actions">
+            <text class="project-action" data-index="{{index}}" bindtap="loadProjectFromLibrary">载入</text>
+            <text class="project-action danger" data-index="{{index}}" bindtap="deleteProjectFromLibrary">删除</text>
+          </view>
+        </view>
+        <view class="empty-state" wx:if="{{!projects.length}}">暂无保存的项目。</view>
+      </scroll-view>
+      <view class="project-clear-row">
+        <text class="project-clear-link" bindtap="clearUserCloudData">清空我的云端数据（项目 / 反馈）</text>
+      </view>
+    </view>
+  </view>
+
+  <view class="overlay card-overlay" wx:if="{{errorVisible}}" bindtap="closeErrorOverlay">
+    <view class="overlay-card" catchtap="noop">
+      <text class="overlay-title">提示信息</text>
+      <text class="error-message">{{errorMessage}}</text>
+      <button class="action-btn secondary" bindtap="closeErrorOverlay">我知道了</button>
+    </view>
+  </view>
+
+  <view class="overlay card-overlay" wx:if="{{csvPreviewVisible}}" bindtap="closeCsvPreview">
+    <view class="modal-card wide" catchtap="noop">
+      <view class="modal-head">
+        <text class="modal-title">CSV 清单</text>
+        <text class="modal-close" bindtap="closeCsvPreview">×</text>
+      </view>
+      <scroll-view scroll-y class="csv-preview"><text>{{csvPreviewText}}</text></scroll-view>
+      <text class="csv-note">内容已复制到剪贴板，可粘贴保存为 .csv 文件。</text>
+    </view>
+  </view>
+</view>

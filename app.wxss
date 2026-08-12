@@ -1,0 +1,23 @@
+page {
+  --bg: #f8fafc;
+  --ink: #0f172a;
+  --muted: #64748b;
+  --line: rgba(15, 23, 42, 0.08);
+  --blue: #3157d5;
+  --violet: #6d4aff;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-size: 28rpx;
+}
+
+button::after {
+  border: none;
+}
+
+view,
+text,
+scroll-view,
+canvas {
+  box-sizing: border-box;
+}

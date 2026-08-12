@@ -1,0 +1,17 @@
+{
+  "pages": [
+    "pages/index/index",
+    "pages/admin/admin",
+    "pages/feedback-success/feedback-success"
+  ],
+  "window": {
+    "navigationBarTitleText": "像素工坊 - 拼豆图纸",
+    "navigationBarBackgroundColor": "#f8fafc",
+    "navigationBarTextStyle": "black",
+    "backgroundColor": "#f8fafc",
+    "backgroundTextStyle": "light"
+  },
+  "style": "v2",
+  "sitemapLocation": "sitemap.json",
+  "lazyCodeLoading": "requiredComponents"
+}
