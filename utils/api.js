@@ -1,8 +1,7 @@
 // 云函数版接口封装：把原有 /api/* 路径映射到云函数，页面代码无需改动。
 const PATH_TO_FUNCTION = {
   "/api/access-status": "access-status",
-  "/api/redeem-card": "redeem-card",
-  "/api/logout-access": "logout-access",
+  "/api/ad-unlock": "ad-unlock",
   "/api/ai-optimize": "ai-optimize",
   "/api/download-prepare": "download-prepare",
 };

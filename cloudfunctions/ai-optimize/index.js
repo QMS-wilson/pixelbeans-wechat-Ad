@@ -1,22 +1,13 @@
 const cloud = require("wx-server-sdk");
 const {
-  readStore,
-  writeStore,
-  getBinding,
-  findCardByCode,
-  getFreeTrialStatus,
-  consumeFreeTrial,
-  normalizeImageHash,
-  assertCardAction,
-  bindCardImage,
-  consumeCardAction,
-  buildAccessPayload,
-  appendLog,
+  readUnlockState,
+  consumeAiCredit,
+  buildUnlockPayload,
   submitImageTask,
   pollImageTask,
   uploadImageResult,
   assembleUpload,
-} = require("./lib/card-lib.js");
+} = require("./lib/cloud-lib.js");
 
 cloud.init({ env: cloud.DYNAMIC_CURRENT_ENV });
 const db = cloud.database();
@@ -49,14 +40,11 @@ function isCollectionNotExist(error) {
 }
 
 // 记录 AI 任务到 ai_tasks 集合，供客户端轮询
-async function recordTask({ taskId, OPENID, cardCode = "", imageHash = "", freeTrialUsed = false, deviceId = "" }) {
+async function recordTask({ taskId, OPENID, imageHash = "" }) {
   await ensureCollection(AI_TASKS_COLLECTION);
   const record = {
     openid: OPENID,
-    cardCode: String(cardCode || ""),
     imageHash: String(imageHash || ""),
-    freeTrialUsed: !!freeTrialUsed,
-    deviceId: String(deviceId || ""),
     status: "processing",
     submitAt: new Date().toISOString(),
   };
@@ -72,14 +60,17 @@ async function recordTask({ taskId, OPENID, cardCode = "", imageHash = "", freeT
   }
 }
 
-// 提交 AI 优化任务：校验资格 -> 组装图片 -> 提交火山引擎 -> 记录任务并立即返回 taskId
+async function getUnlockPayload(OPENID) {
+  return buildUnlockPayload(await readUnlockState(OPENID));
+}
+
+// 提交 AI 优化任务：校验广告解锁额度 -> 组装图片 -> 提交火山引擎 -> 扣减额度并记录任务
 async function submitTask(OPENID, event) {
-  const { imageBase64, imageFileID: inputFileID, imageUploadId, prompt, imageHash, freeTrial, deviceId } = event || {};
+  const { imageBase64, imageFileID: inputFileID, imageUploadId, prompt, imageHash } = event || {};
   console.log("[ai-optimize] submit start", {
     OPENID,
     promptLength: prompt ? String(prompt).length : 0,
     imageHash,
-    freeTrial: !!freeTrial,
     hasBase64: !!imageBase64,
     hasFileID: !!inputFileID,
     hasUploadId: !!imageUploadId,
@@ -99,61 +90,18 @@ async function submitTask(OPENID, event) {
     return { error: "Missing imageBase64 parameter" };
   }
 
-  const store = await readStore();
-  const binding = getBinding(store, OPENID);
-  const card = binding ? findCardByCode(store, binding.cardCode) : null;
-  const isTrial = !card && freeTrial === true;
-
-  if (isTrial) {
-    const deviceTrial = getFreeTrialStatus(store, deviceId);
-    const openidTrial = getFreeTrialStatus(store, `openid:${OPENID}`);
-    if (!deviceTrial || deviceTrial.used || (openidTrial && openidTrial.used)) {
-      return { error: "AI optimization denied", message: "免费 AI 体验次数已用完，请兑换卡密后继续使用。" };
-    }
-    const normalizedHash = normalizeImageHash(imageHash);
-    if (!normalizedHash) {
-      return { error: "AI optimization denied", message: "未识别到当前图片，请重新上传后重试。" };
-    }
-    console.log("[ai-optimize] trial submit start", { deviceId });
-    const taskId = await submitImageTask(resolvedImageBase64, prompt);
-    await recordTask({ taskId, OPENID, imageHash: normalizedHash, freeTrialUsed: true, deviceId });
-    console.log("[ai-optimize] trial submitted", { taskId });
-    return { success: true, taskId, submitted: true };
+  const state = await readUnlockState(OPENID);
+  if (Number(state.aiRemaining) <= 0) {
+    return { error: "AI optimization denied", message: "AI 优化额度已用完，看完广告后可继续使用。" };
   }
 
-  if (!card) {
-    return { error: "AI optimization denied", message: "请先兑换卡密后再操作。" };
-  }
-  const allowed = assertCardAction(card, imageHash, "ai");
-  if (!allowed.ok) {
-    await writeStore(store);
-    return { error: "AI optimization denied", message: allowed.message };
-  }
-  const bindResult = bindCardImage(card, allowed.imageHash);
-  if (!bindResult.ok) {
-    await writeStore(store);
-    return { error: "AI optimization denied", message: bindResult.message };
-  }
-  // 提交前先持久化图片绑定，避免并发重复提交
-  await writeStore(store);
-
-  console.log("[ai-optimize] paid submit start");
+  console.log("[ai-optimize] submit task");
   const taskId = await submitImageTask(resolvedImageBase64, prompt);
-  await recordTask({ taskId, OPENID, cardCode: card.code, imageHash: allowed.imageHash, freeTrialUsed: false });
-  console.log("[ai-optimize] paid submitted", { taskId });
-  return { success: true, taskId, submitted: true, ...buildAccessPayload(card) };
-}
-
-// 查询 AI 任务结果（客户端轮询）：成功后上传结果图并幂等扣减次数
-async function getAccessPayload(OPENID) {
-  try {
-    const store = await readStore();
-    const binding = getBinding(store, OPENID);
-    const card = binding ? findCardByCode(store, binding.cardCode) : null;
-    return card ? buildAccessPayload(card) : {};
-  } catch (error) {
-    return {};
-  }
+  // 提交成功后扣减一次 AI 额度（任务失败 / 取消不退回，与旧版提示一致）
+  const consumed = await consumeAiCredit(OPENID);
+  await recordTask({ taskId, OPENID, imageHash });
+  console.log("[ai-optimize] submitted", { taskId, consumed });
+  return { success: true, taskId, submitted: true, ...(await getUnlockPayload(OPENID)) };
 }
 
 async function checkTask(OPENID, event) {
@@ -178,7 +126,7 @@ async function checkTask(OPENID, event) {
       imageFileID: task.imageFileID,
       taskId,
       done: true,
-      ...(await getAccessPayload(OPENID)),
+      ...(await getUnlockPayload(OPENID)),
     };
   }
   if (task.status === "failed") {
@@ -208,7 +156,7 @@ async function checkTask(OPENID, event) {
   }
 
   const imageFileID = await uploadImageResult(poll.imageDataUrl, taskId);
-  // 幂等守卫：只有 processing -> done 的更新成功才扣减次数，避免并发轮询重复扣费
+  // 幂等守卫：只有 processing -> done 的更新成功才视为完成，避免并发轮询重复处理
   let updated = 0;
   try {
     const upd = await coll.where({ _id: taskId, status: "processing" }).update({
@@ -226,33 +174,14 @@ async function checkTask(OPENID, event) {
         imageFileID: (again.data && again.data.imageFileID) || imageFileID,
         taskId,
         done: true,
-        ...(await getAccessPayload(OPENID)),
+        ...(await getUnlockPayload(OPENID)),
       };
     } catch (error) {
-      return { success: true, imageFileID, taskId, done: true, ...(await getAccessPayload(OPENID)) };
+      return { success: true, imageFileID, taskId, done: true, ...(await getUnlockPayload(OPENID)) };
     }
   }
 
-  const store = await readStore();
-  const binding = getBinding(store, OPENID);
-  const card = binding ? findCardByCode(store, binding.cardCode) : null;
-  // 扣减提交时锁定的卡密，避免轮询期间用户更换卡密导致扣错
-  const taskCard = task.cardCode ? findCardByCode(store, task.cardCode) : null;
-  if (task.freeTrialUsed) {
-    consumeFreeTrial(store, task.deviceId || OPENID, task.imageHash || "");
-    consumeFreeTrial(store, `openid:${OPENID}`, task.imageHash || "");
-    appendLog(store, OPENID, { type: "ai_free_trial", imageHash: task.imageHash || "", detail: "free trial ai optimize" });
-  } else if (taskCard) {
-    consumeCardAction(taskCard, "ai");
-    appendLog(store, OPENID, {
-      type: "ai_optimize",
-      cardCode: taskCard.code,
-      imageHash: taskCard.imageHash || task.imageHash || "",
-      detail: "ai optimize success",
-    });
-  }
-  await writeStore(store);
-  return { success: true, imageFileID, taskId, ...(card ? buildAccessPayload(card) : {}) };
+  return { success: true, imageFileID, taskId, ...(await getUnlockPayload(OPENID)) };
 }
 
 // AI 优化：action=submit 提交任务并立即返回 taskId；action=check 轮询结果（幂等扣减）

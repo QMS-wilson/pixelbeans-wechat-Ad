@@ -1,7 +1,6 @@
 {
   "pages": [
     "pages/index/index",
-    "pages/admin/admin",
     "pages/feedback-success/feedback-success"
   ],
   "window": {

@@ -7,7 +7,7 @@
         <text class="brand-sub">Bead Pattern Lab</text>
       </view>
     </view>
-    <view class="header-access {{paidAccess ? 'paid' : ''}}" bindtap="openCardModal">{{accessStatusText}}</view>
+    <view class="header-access {{unlocked ? 'paid' : ''}}" bindtap="openUnlockModal">{{accessStatusText}}</view>
   </view>
 
   <view class="section-shell tool-card">
@@ -34,7 +34,7 @@
       <text class="upload-sub">{{uploadHint}}</text>
     </view>
 
-    <view class="canvas-panel {{paidAccess ? '' : 'preview-protected'}}">
+    <view class="canvas-panel {{unlocked ? '' : 'preview-protected'}}">
       <view class="canvas-frame">
         <canvas
           type="2d"
@@ -168,9 +168,9 @@
       <view class="control-note">{{controlNote}}</view>
 
       <view class="actions">
-        <button class="action-btn primary" disabled="{{exportBusy || cellsEmpty || (paidAccess && downloadRemaining <= 0)}}" bindtap="exportCodePng">下载带 Code 图纸</button>
-        <button class="action-btn secondary" disabled="{{exportBusy || cellsEmpty || (paidAccess && downloadRemaining <= 0)}}" bindtap="exportCleanPng">下载无 Code 图纸</button>
-        <button class="action-btn secondary" disabled="{{exportBusy || cellsEmpty || (paidAccess && downloadRemaining <= 0)}}" bindtap="exportCsvTap">下载 CSV 清单</button>
+        <button class="action-btn primary" disabled="{{exportBusy || cellsEmpty || (unlocked && downloadRemaining <= 0)}}" bindtap="exportCodePng">下载带 Code 图纸</button>
+        <button class="action-btn secondary" disabled="{{exportBusy || cellsEmpty || (unlocked && downloadRemaining <= 0)}}" bindtap="exportCleanPng">下载无 Code 图纸</button>
+        <button class="action-btn secondary" disabled="{{exportBusy || cellsEmpty || (unlocked && downloadRemaining <= 0)}}" bindtap="exportCsvTap">下载 CSV 清单</button>
       </view>
     </view>
   </view>
@@ -194,12 +194,12 @@
 
   <view class="section-shell membership">
     <view class="membership-head">
-      <text class="membership-title">卡密兑换</text>
-      <text class="membership-sub">{{paymentUsageSummary}}</text>
+      <text class="membership-title">广告解锁</text>
+      <text class="membership-sub">{{usageSummary}}</text>
     </view>
-    <view class="membership-card" bindtap="openCardModal">
+    <view class="membership-card" bindtap="openUnlockModal">
       <text>{{accessStatusBadge}}</text>
-      <text class="membership-action">{{paidAccess ? '查看授权状态' : '立即解锁下载'}}</text>
+      <text class="membership-action">{{unlocked ? '查看解锁状态' : '看广告立即解锁'}}</text>
     </view>
   </view>
 
@@ -274,36 +274,25 @@
     </view>
   </view>
 
-  <view class="overlay card-overlay" wx:if="{{cardModalVisible}}" bindtap="closeCardModal">
+  <view class="overlay modal-overlay" wx:if="{{unlockModalVisible}}" bindtap="closeUnlockModal">
     <view class="modal-card" catchtap="noop">
       <view class="modal-head">
-        <text class="modal-title">解锁下载图纸结果</text>
-        <text class="modal-close" bindtap="closeCardModal">×</text>
+        <text class="modal-title">广告解锁</text>
+        <text class="modal-close" bindtap="closeUnlockModal">×</text>
       </view>
-      <text class="card-modal-badge">{{accessStatusBadgeModal}}</text>
-      <view class="card-benefits">
+      <text class="unlock-badge">{{accessStatusBadgeModal}}</text>
+      <view class="unlock-benefits">
+        <text>✓ AI 优化（每次消耗 1 次额度）</text>
         <text>✓ 带 Code 图纸下载</text>
-        <text>✓ 无 Code 图纸下载</text>
-        <text>✓ CSV 清单下载</text>
+        <text>✓ 无 Code 图纸下载 / CSV 清单</text>
       </view>
-      <input
-        class="card-input"
-        value="{{cardCodeInput}}"
-        placeholder="例如 PB-ABCD-EFGH-JKLM"
-        bindinput="onCardCodeInput"
-      />
-      <view class="card-actions">
-        <button class="action-btn primary" disabled="{{redeemDisabled}}" bindtap="redeemCard">
-          {{paidAccess ? '已完成解锁' : '立即解锁下载'}}
-        </button>
-        <button class="action-btn secondary" wx:if="{{paidAccess}}" bindtap="logoutAccess">退出当前授权</button>
-        <button class="action-btn ghost" bindtap="closeCardModal">稍后再说</button>
-      </view>
-      <text class="redeem-message {{redeemMessageType}}">{{cardRedeemMessage}}</text>
+      <button class="action-btn primary" disabled="{{adBusy}}" bindtap="showAdUnlock">看广告解锁</button>
+      <text class="unlock-message {{unlockMessageType}}">{{unlockMessage}}</text>
+      <button class="action-btn ghost" bindtap="closeUnlockModal">稍后再说</button>
     </view>
   </view>
 
-  <view class="overlay card-overlay" wx:if="{{projectModalVisible}}" bindtap="closeProjectLibrary">
+  <view class="overlay modal-overlay" wx:if="{{projectModalVisible}}" bindtap="closeProjectLibrary">
     <view class="modal-card" catchtap="noop">
       <view class="modal-head">
         <text class="modal-title">项目库</text>
@@ -332,7 +321,7 @@
     </view>
   </view>
 
-  <view class="overlay card-overlay" wx:if="{{errorVisible}}" bindtap="closeErrorOverlay">
+  <view class="overlay modal-overlay" wx:if="{{errorVisible}}" bindtap="closeErrorOverlay">
     <view class="overlay-card" catchtap="noop">
       <text class="overlay-title">提示信息</text>
       <text class="error-message">{{errorMessage}}</text>
@@ -340,7 +329,7 @@
     </view>
   </view>
 
-  <view class="overlay card-overlay" wx:if="{{csvPreviewVisible}}" bindtap="closeCsvPreview">
+  <view class="overlay modal-overlay" wx:if="{{csvPreviewVisible}}" bindtap="closeCsvPreview">
     <view class="modal-card wide" catchtap="noop">
       <view class="modal-head">
         <text class="modal-title">CSV 清单</text>

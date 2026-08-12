@@ -1,47 +1,32 @@
 const cloud = require("wx-server-sdk");
 const {
-  readStore,
-  writeStore,
-  getBinding,
-  findCardByCode,
-  assertCardAction,
-  bindCardImage,
-  consumeCardAction,
-  appendLog,
+  readUnlockState,
+  consumeDownloadCredit,
+  buildUnlockPayload,
   prepareDownloadFile,
   assembleUpload,
-} = require("./lib/card-lib.js");
+} = require("./lib/cloud-lib.js");
 
 cloud.init({ env: cloud.DYNAMIC_CURRENT_ENV });
 
-// 下载预处理：校验卡密、扣次，生成文件上传到云存储，返回 fileID
+// 下载预处理：校验广告解锁额度、扣次，生成文件上传到云存储，返回 fileID
 exports.main = async (event) => {
   try {
     const { OPENID } = cloud.getWXContext();
-    const { filename = "export", imageHash, dataUrl, dataFileID, dataUploadId, dataExt, text } = event || {};
+    const { filename = "export", dataUrl, dataFileID, dataUploadId, dataExt, text } = event || {};
     const safeFilename = String(filename).replace(/[/\\\r\n\0]/g, "_").replace(/\.[^/.]+$/, "");
     console.log("[download-prepare] start", {
       OPENID,
       safeFilename,
-      imageHash,
       hasDataUrl: !!dataUrl,
       hasDataFileID: !!dataFileID,
       hasDataUploadId: !!dataUploadId,
       textLength: text ? String(text).length : 0,
     });
 
-    const store = await readStore();
-    const binding = getBinding(store, OPENID);
-    const card = binding ? findCardByCode(store, binding.cardCode) : null;
-    const allowed = assertCardAction(card, imageHash, "download");
-    if (!allowed.ok) {
-      await writeStore(store);
-      return { error: "Download denied", message: allowed.message };
-    }
-    const bindResult = bindCardImage(card, allowed.imageHash);
-    if (!bindResult.ok) {
-      await writeStore(store);
-      return { error: "Download denied", message: bindResult.message };
+    const state = await readUnlockState(OPENID);
+    if (Number(state.downloadRemaining) <= 0) {
+      return { error: "Download denied", message: "下载额度已用完，看完广告后可继续下载。" };
     }
 
     // 图片大文件走云存储：前端传 dataFileID，函数下载后转 dataUrl
@@ -65,17 +50,18 @@ exports.main = async (event) => {
       filename: safeFilename,
       ext: dataExt,
     });
-    consumeCardAction(card, "download");
-    appendLog(store, OPENID, {
-      type: "download",
-      cardCode: card.code,
-      imageHash: card.imageHash || allowed.imageHash,
-      detail: prepared.filename,
-    });
-    await writeStore(store);
+    // 文件生成成功后扣减一次下载额度
+    const consumed = await consumeDownloadCredit(OPENID);
 
     console.log("[download-prepare] prepared", { fileID: prepared.fileID, filename: prepared.filename, mime: prepared.mime });
-    return { success: true, fileID: prepared.fileID, filename: prepared.filename, mime: prepared.mime };
+    return {
+      success: true,
+      fileID: prepared.fileID,
+      filename: prepared.filename,
+      mime: prepared.mime,
+      consumed,
+      ...buildUnlockPayload(await readUnlockState(OPENID)),
+    };
   } catch (error) {
     console.error("[download-prepare] failed", error);
     return { error: "Download prepare failed", message: error.message || "下载准备失败" };

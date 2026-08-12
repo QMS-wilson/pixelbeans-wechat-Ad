@@ -800,7 +800,7 @@
   z-index: 110;
 }
 
-.card-overlay {
+.modal-overlay {
   z-index: 130;
 }
 
@@ -883,22 +883,22 @@
 
 .overlay-sub,
 .error-message,
-.redeem-message,
+.unlock-message,
 .csv-note {
   font-size: 24rpx;
   line-height: 1.6;
   color: #64748b;
 }
 
-.redeem-message.error {
+.unlock-message.error {
   color: #dc2626;
 }
 
-.redeem-message.success {
+.unlock-message.success {
   color: #166534;
 }
 
-.card-modal-badge {
+.unlock-badge {
   align-self: center;
   padding: 10rpx 22rpx;
   border-radius: 999rpx;
@@ -907,27 +907,13 @@
   background: rgba(49, 87, 213, 0.1);
 }
 
-.card-benefits {
+.unlock-benefits {
   display: flex;
   flex-direction: column;
   gap: 6rpx;
   font-size: 24rpx;
   color: #166534;
   text-align: left;
-}
-
-.card-input {
-  min-height: 88rpx;
-  padding: 0 24rpx;
-  border-radius: 18rpx;
-  background: #f8fafc;
-  font-size: 26rpx;
-}
-
-.card-actions {
-  display: flex;
-  flex-direction: column;
-  gap: 12rpx;
 }
 
 .csv-preview {

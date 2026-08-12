@@ -2,6 +2,7 @@ const { BEAD_PALETTES } = require("../../utils/palettes");
 const { API_BASE, requestJson, callFunction, uploadDataChunks } = require("../../utils/api");
 const { sha256Bytes } = require("../../utils/sha256");
 const { base64ToBytes, arrayBufferToUtf8 } = require("../../utils/image");
+const config = require("../../config.js");
 
 const DEFAULT_AI_PROMPT =
   "将图片优化为适合拼豆图纸的形象：保留主体特征，白色干净背景，chibi 可爱画风，pixel art style, 16-bit, retro game aesthetic, sharp focus, high contrast, clean lines, detailed pixel art, masterpiece, best quality";
@@ -10,9 +11,6 @@ const MAX_CANVAS_DIMENSION = 30000;
 const MAX_CANVAS_PIXELS = 200000000;
 const PATTERN_STORAGE_KEY = "pixelWorkshopPattern";
 const PROJECTS_STORAGE_KEY = "pixelWorkshopProjects";
-const ACCESS_TOKEN_KEY = "pixelWorkshopAccessToken";
-const FREE_TRIAL_KEY = "pixelWorkshopFreeTrialUsed";
-const DEVICE_ID_KEY = "pixelWorkshopDeviceId";
 
 // AI 提示词快捷风格模板
 const AI_PROMPT_PRESETS = [
@@ -37,11 +35,11 @@ Page({
     uploadTitle: "上传图片开始生成",
     uploadHint: "支持 JPG / PNG / WebP，可点击选择图片",
     sourceType: "none",
-    accessStatusText: "点击下载时会弹出兑换窗口",
+    accessStatusText: "点击下载时会弹出解锁窗口",
     accessStatusBadge: "当前未解锁下载权限",
     accessStatusBadgeModal: "当前未解锁下载权限",
-    paymentUsageSummary: "AI 剩余 0/3 次 · 下载剩余 0/3 次",
-    paidAccess: false,
+    usageSummary: "AI 剩余 0 次 · 下载剩余 0 次",
+    unlocked: false,
     gridSize: 64,
     mergeLevel: 24,
     gridLineOn: true,
@@ -81,17 +79,16 @@ Page({
     aiOverlayVisible: false,
     aiWaitText: "",
     preprocessVisible: false,
-    cardModalVisible: false,
+    unlockModalVisible: false,
     errorVisible: false,
     csvPreviewVisible: false,
     projectModalVisible: false,
     projects: [],
     projectName: "",
     errorMessage: "",
-    cardRedeemMessage: "兑换成功后，本次浏览会自动解锁下载权限。",
-    redeemMessageType: "",
-    cardCodeInput: "",
-    redeemDisabled: false,
+    unlockMessage: "观看完整广告后即可解锁 AI 优化与图纸下载。",
+    unlockMessageType: "",
+    adBusy: false,
     overlayOpen: false,
     showAiHint: false,
     showClearHint: false,
@@ -112,10 +109,7 @@ Page({
     this.sourceName = "";
     this.sourceType = "none";
     this.sourceFingerprint = "";
-    this.paidAccess = false;
-    this.cardCode = "";
-    this.cardStatus = "none";
-    this.accessToken = wx.getStorageSync(ACCESS_TOKEN_KEY) || "";
+    this.unlocked = false;
     this.aiOptimizeRemaining = 0;
     this.downloadRemaining = 0;
     this.error = "";
@@ -132,9 +126,9 @@ Page({
     this.aiOptimizeInFlightKey = "";
     this.aiOptimizeInFlightPromise = null;
     this.pendingProtectedAction = null;
-    this.pendingCardError = "";
+    this.pendingUnlockError = "";
+    this._rewardedAd = null;
     this._saveTimer = null;
-    this.freeTrialUsed = wx.getStorageSync(FREE_TRIAL_KEY) === true;
     this.aiWaitTimer = null;
 
     this.setData({ aiPrompt: this.confirmedAiPrompt });
@@ -240,8 +234,8 @@ Page({
     this.error = "";
   },
 
-  setRedeemMessage(message, type = "info") {
-    this.setData({ cardRedeemMessage: message, redeemMessageType: type });
+  setUnlockMessage(message, type = "info") {
+    this.setData({ unlockMessage: message, unlockMessageType: type });
   },
 
   openErrorOverlay(message) {
@@ -260,7 +254,7 @@ Page({
       this.data.exportProgressVisible ||
       this.data.aiOverlayVisible ||
       this.data.preprocessVisible ||
-      this.data.cardModalVisible ||
+      this.data.unlockModalVisible ||
       this.data.errorVisible ||
       this.data.csvPreviewVisible;
     const changed = open !== this.data.overlayOpen;
@@ -448,54 +442,39 @@ Page({
     this.renderEditorPalette();
   },
 
-  // ---------- 授权状态 ----------
-  hasPaidAccess() {
-    return Boolean(this.paidAccess);
+  // ---------- 解锁状态（广告解锁） ----------
+  hasAccess() {
+    return Boolean(this.unlocked);
   },
 
   syncAccessUi() {
-    const paid = this.hasPaidAccess();
-    const statusValue = paid
-      ? `已解锁${this.cardCode ? ` · ${this.cardCode}` : ""} · AI ${this.aiOptimizeRemaining}/3 · 下载 ${this.downloadRemaining}/3`
-      : this.cardStatus === "exhausted"
-        ? "当前卡密已失效，请更换新卡密"
-        : "当前尚未解锁下载权限";
-    const summaryValue = paid
-      ? `AI 剩余 ${this.aiOptimizeRemaining}/3 次 · 下载剩余 ${this.downloadRemaining}/3 次${
-          this.aiOptimizeRemaining === 1 || this.downloadRemaining === 1 ? " · 注意：次数即将用完" : ""
-        }`
-      : this.cardStatus === "exhausted"
-        ? "当前卡密已作废，请更换新卡密"
-        : "AI 剩余 0/3 次 · 下载剩余 0/3 次";
+    const unlocked = this.hasAccess();
+    const statusValue = unlocked
+      ? `已解锁 · AI ${this.aiOptimizeRemaining} 次 · 下载 ${this.downloadRemaining} 次`
+      : "当前尚未解锁下载权限";
+    const summaryValue = unlocked
+      ? `AI 剩余 ${this.aiOptimizeRemaining} 次 · 下载剩余 ${this.downloadRemaining} 次`
+      : "AI 剩余 0 次 · 下载剩余 0 次";
     this.setData({
       accessStatusText: statusValue,
       accessStatusBadge: statusValue,
       accessStatusBadgeModal: statusValue,
-      paymentUsageSummary: summaryValue,
-      redeemDisabled: paid,
-      aiOptimizeRemaining: this.aiOptimizeRemaining,
+      usageSummary: summaryValue,
+      aiRemaining: this.aiOptimizeRemaining,
       downloadRemaining: this.downloadRemaining,
     });
   },
 
   syncAccessState(result = null) {
-    const wasPaid = this.paidAccess;
-    this.paidAccess = Boolean(result && result.paid);
-    this.cardCode = (result && result.cardCode) || "";
-    this.cardStatus = (result && result.cardStatus) || (this.paidAccess ? "active" : "none");
-    this.aiOptimizeRemaining = Number(result && result.aiOptimizeRemaining) || 0;
+    const wasUnlocked = this.unlocked;
+    this.unlocked = Boolean(
+      result && (result.unlocked || Number(result.aiRemaining) > 0 || Number(result.downloadRemaining) > 0),
+    );
+    this.aiOptimizeRemaining = Number(result && result.aiRemaining) || 0;
     this.downloadRemaining = Number(result && result.downloadRemaining) || 0;
-    const token = (result && result.accessToken) || this.accessToken || "";
-    if (result && result.paid === false) {
-      this.accessToken = "";
-      wx.removeStorageSync(ACCESS_TOKEN_KEY);
-    } else if (token) {
-      this.accessToken = token;
-      wx.setStorageSync(ACCESS_TOKEN_KEY, token);
-    }
-    this.setData({ paidAccess: this.paidAccess });
+    this.setData({ unlocked: this.unlocked });
     this.syncAccessUi();
-    if (this.paidAccess !== wasPaid) {
+    if (this.unlocked !== wasUnlocked) {
       this.renderCanvas();
       this.updateComparePreview();
     }
@@ -503,14 +482,11 @@ Page({
 
   async loadAccessStatus() {
     try {
-      const path = this.accessToken
-        ? `/api/access-status?accessToken=${encodeURIComponent(this.accessToken)}`
-        : "/api/access-status";
-      const result = await requestJson(path, { method: "GET" });
+      const result = await requestJson("/api/access-status", { method: "GET" });
       this.syncAccessState(result);
-      if (this.hasPaidAccess()) {
-        this.setRedeemMessage(
-          `当前卡密可继续使用：AI 剩余 ${this.aiOptimizeRemaining} 次，下载剩余 ${this.downloadRemaining} 次。`,
+      if (this.hasAccess()) {
+        this.setUnlockMessage(
+          `当前已解锁：AI 剩余 ${this.aiOptimizeRemaining} 次，下载剩余 ${this.downloadRemaining} 次。`,
           "success",
         );
       }
@@ -521,7 +497,7 @@ Page({
 
   queueProtectedAction(action) {
     this.pendingProtectedAction = action;
-    this.openCardModal();
+    this.openUnlockModal();
   },
 
   async runPendingProtectedAction() {
@@ -532,91 +508,81 @@ Page({
     }
   },
 
-  openCardModal() {
+  openUnlockModal() {
     this.syncAccessUi();
-    if (this.pendingCardError) {
-      this.setRedeemMessage(this.pendingCardError, "error");
+    if (this.pendingUnlockError) {
+      this.setUnlockMessage(this.pendingUnlockError, "error");
     }
-    this.setData({ cardModalVisible: true });
+    this.setData({ unlockModalVisible: true });
     this.syncOverlayState();
   },
 
-  closeCardModal() {
-    this.setData({ cardModalVisible: false });
+  closeUnlockModal() {
+    this.setData({ unlockModalVisible: false });
     this.syncOverlayState();
   },
 
-  onCardCodeInput(e) {
-    this.setData({ cardCodeInput: e.detail.value });
+  // 广告位未配置时返回 null，前端提示“即将上线”
+  ensureRewardedAd() {
+    if (this._rewardedAd) return this._rewardedAd;
+    if (!config.adUnitId) return null;
+    try {
+      this._rewardedAd = wx.createRewardedVideoAd({ adUnitId: config.adUnitId });
+      this._rewardedAd.onError((error) => {
+        console.error("[ad-unlock] ad error", error);
+      });
+      this._rewardedAd.onClose((res) => {
+        if (res && res.isEnded) {
+          this.grantAdReward();
+        } else {
+          this.setUnlockMessage("需要完整观看广告后才能解锁，请重试。", "error");
+        }
+      });
+    } catch (error) {
+      console.error("[ad-unlock] create ad failed", error);
+      this._rewardedAd = null;
+    }
+    return this._rewardedAd;
   },
 
-  async redeemCard() {
-    const cardCode = (this.data.cardCodeInput || "").trim();
-    if (!cardCode) {
-      this.setRedeemMessage("请输入有效卡密后再解锁下载。", "error");
+  async showAdUnlock() {
+    const ad = this.ensureRewardedAd();
+    if (!ad) {
+      this.setUnlockMessage("广告解锁功能即将上线，敬请期待。", "info");
       return;
     }
-    this.setData({ redeemDisabled: true });
-    this.setRedeemMessage("正在验证卡密，请稍候…", "info");
+    this.setData({ adBusy: true });
     try {
-      const result = await requestJson("/api/redeem-card", {
-        method: "POST",
-        data: { cardCode },
-      });
-      if (!result || !result.success) {
-        throw new Error((result && result.message) || "卡密兑换失败，请稍后重试。");
+      if (typeof ad.load === "function") await ad.load();
+      await ad.show();
+    } catch (error) {
+      // 加载失败时尝试直接 show（部分环境下 load 与 show 可自动衔接）
+      try {
+        await ad.show();
+      } catch (error2) {
+        console.error("[ad-unlock] show failed", error2);
+        this.setUnlockMessage("广告加载失败，请稍后重试。", "error");
       }
+    } finally {
+      this.setData({ adBusy: false });
+    }
+  },
+
+  async grantAdReward() {
+    try {
+      const result = await callFunction("ad-unlock", { action: "grant" });
       this.syncAccessState(result);
-      this.setRedeemMessage(
-        result.message ||
-          `卡密已激活：AI 剩余 ${this.aiOptimizeRemaining} 次，下载剩余 ${this.downloadRemaining} 次。`,
+      this.setUnlockMessage(
+        `解锁成功：AI 剩余 ${this.aiOptimizeRemaining} 次，下载剩余 ${this.downloadRemaining} 次。`,
         "success",
       );
-      this.setData({ cardModalVisible: false, cardCodeInput: "" });
+      this.setData({ unlockModalVisible: false });
       this.syncOverlayState();
       await this.runPendingProtectedAction();
     } catch (error) {
-      this.setData({ redeemDisabled: false });
-      this.setRedeemMessage(error.message || "卡密验证失败。", "error");
+      console.error("[ad-unlock] grant failed", error);
+      this.setUnlockMessage((error && error.message) || "解锁失败，请稍后重试。", "error");
     }
-  },
-
-  async logoutAccess() {
-    try {
-      await requestJson("/api/logout-access", { method: "POST" });
-    } catch {
-      // ignore
-    }
-    this.accessToken = "";
-    wx.removeStorageSync(ACCESS_TOKEN_KEY);
-    this.pendingProtectedAction = null;
-    this.pendingCardError = "";
-    this.syncAccessState(null);
-    this.setData({ cardCodeInput: "" });
-    this.setRedeemMessage("已退出当前授权，可重新输入卡密解锁下载。", "info");
-  },
-
-  handleCardDenied(message) {
-    this.paidAccess = false;
-    this.cardStatus = "exhausted";
-    this.cardCode = "";
-    this.accessToken = "";
-    wx.removeStorageSync(ACCESS_TOKEN_KEY);
-    this.pendingCardError = message || "当前卡密已失效，请使用新卡密。";
-    this.error = this.pendingCardError;
-    this.setRedeemMessage(this.pendingCardError, "error");
-    this.setData({ paidAccess: false });
-    this.syncAccessUi();
-    this.setData({
-      statusText: "下载权限已失效",
-      statusState: "error",
-      canvasHint: this.pendingCardError,
-    });
-    requestJson("/api/logout-access", { method: "POST" }).catch(() => {});
-  },
-
-  isCardDeniedError(error) {
-    return error && (error.status === 403 || error.status === 409);
   },
 
   // ---------- 图片载入 ----------
@@ -866,18 +832,12 @@ Page({
       return this.aiOptimizeInFlightPromise;
     }
 
-    // 只有真正发起新的 AI 优化（缓存未命中）时才校验卡密/免费体验
-    const trialAvailable = !this.hasPaidAccess() && !this.freeTrialUsed;
-    if (!this.hasPaidAccess() && !trialAvailable) {
+    // 只有真正发起新的 AI 优化（缓存未命中）时才校验广告解锁额度
+    if (this.aiOptimizeRemaining <= 0) {
       this.queueProtectedAction(() => this.processCurrentImage());
-      throw new Error("请先兑换卡密后再使用 AI 优化。");
+      throw new Error(this.hasAccess() ? "AI 优化额度已用完，看广告可继续使用。" : "看广告解锁后即可使用 AI 优化。");
     }
-    const isTrial = trialAvailable;
     const myToken = this.processToken;
-    if (this.hasPaidAccess() && this.aiOptimizeRemaining <= 0) {
-      this.queueProtectedAction(() => this.processCurrentImage());
-      throw new Error("当前卡密 AI 优化次数已用完，请兑换新卡密。");
-    }
 
     this.aiOptimizeInFlightKey = cacheKey;
     this.aiOptimizeInFlightPromise = (async () => {
@@ -890,8 +850,6 @@ Page({
           imageExt,
           prompt,
           imageHash: this.sourceFingerprint,
-          accessToken: this.accessToken || undefined,
-          ...(isTrial ? { freeTrial: true, deviceId: this.getDeviceId() } : {}),
         },
       });
       const taskId = submitResult && submitResult.taskId;
@@ -918,11 +876,6 @@ Page({
           continue;
         }
         if (check && check.success && check.imageFileID) {
-          if (isTrial) {
-            this.freeTrialUsed = true;
-            wx.setStorageSync(FREE_TRIAL_KEY, true);
-            this.toast("免费 AI 体验已完成，后续使用需兑换卡密");
-          }
           this.syncAccessState(check);
           const downloadResult = await new Promise((resolve, reject) => {
             wx.cloud.downloadFile({
@@ -951,15 +904,6 @@ Page({
         this.aiOptimizeInFlightPromise = null;
       }
     }
-  },
-
-  getDeviceId() {
-    let deviceId = wx.getStorageSync(DEVICE_ID_KEY);
-    if (!deviceId) {
-      deviceId = `mp-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
-      wx.setStorageSync(DEVICE_ID_KEY, deviceId);
-    }
-    return deviceId;
   },
 
   async buildProcessedSource(image, aiInfo = null) {
@@ -1200,11 +1144,6 @@ Page({
       this.schedulePatternSave();
     } catch (error) {
       if (token !== this.processToken) return;
-      if (this.isCardDeniedError(error)) {
-        this.handleCardDenied(error.message);
-        this.openErrorOverlay(`AI 优化未完成：${error.message || "当前卡密已失效，请使用新卡密。"}`);
-        return;
-      }
       this.setError(error.message || "生成失败，请稍后重试。");
       this.updateComparePreview(this.originalImage, this.image || this.originalImage);
     } finally {
@@ -1218,7 +1157,7 @@ Page({
 
   // ---------- 渲染 ----------
   applyPreviewProtection(context, width, height) {
-    if (this.hasPaidAccess()) return;
+    if (this.hasAccess()) return;
     if (!width || !height) return;
     const diagonal = Math.sqrt(width * width + height * height);
     context.save();
@@ -1232,7 +1171,7 @@ Page({
     const stepY = Math.max(96, Math.floor(height * 0.16));
     for (let y = -diagonal; y <= diagonal; y += stepY) {
       for (let x = -diagonal; x <= diagonal; x += stepX) {
-        context.fillText("未付款预览", x, y);
+        context.fillText("解锁后无水印", x, y);
       }
     }
     context.restore();
@@ -1382,13 +1321,13 @@ Page({
     const preprocessText = this.data.aiOptimizeOn ? " · 预处理：AI 优化" : "";
     if (!this.cells.length) {
       this.setData({
-        controlNote: this.hasPaidAccess()
+        controlNote: this.hasAccess()
           ? "上传图片后会自动生成图纸，也可选 AI 优化预处理。"
-          : "当前预览版未解锁下载权限，请先兑换卡密后再下载图纸。",
+          : "当前未解锁下载权限，看广告解锁后可下载图纸。",
       });
       return;
     }
-    const protectionText = this.hasPaidAccess() ? " · 下载权限已解锁" : " · 下载权限未解锁";
+    const protectionText = this.hasAccess() ? " · 下载权限已解锁" : " · 下载权限未解锁";
     this.setData({
       controlNote: `当前使用 ${BEAD_PALETTES[PALETTE_KEYS[this.data.paletteIndex]].label} 色板，共 ${
         Object.keys(this.counts).length
@@ -1877,18 +1816,13 @@ Page({
 
   async exportPng(showCodes) {
     if (!this.cells.length) return;
-    if (!this.hasPaidAccess()) {
-      this.queueProtectedAction(() => this.exportPng(showCodes));
-      this.setRedeemMessage("请先兑换卡密，解锁下载权限后再导出图纸。", "error");
-      return;
-    }
     if (this.downloadRemaining <= 0) {
       this.queueProtectedAction(() => this.exportPng(showCodes));
-      this.setRedeemMessage("当前卡密下载次数已用完，请兑换新卡密。", "error");
+      this.setUnlockMessage(this.hasAccess() ? "下载额度已用完，看广告可继续下载图纸。" : "看广告解锁后即可下载图纸。", "error");
       return;
     }
     if (!this.sourceFingerprint) {
-      this.setRedeemMessage("未识别到当前图片，请重新上传后再试。", "error");
+      this.setUnlockMessage("未识别到当前图片，请重新上传后再试。", "error");
       return;
     }
     console.log("[exportPng] start", { showCodes, cols: this.cols, rows: this.rows });
@@ -1922,13 +1856,8 @@ Page({
       await this.loadAccessStatus();
       this.setData({ statusText: "导出开始，正在下载…", statusState: "working", canvasHint: "图纸导出请求已发送。" });
     } catch (error) {
-      if (this.isCardDeniedError(error)) {
-        this.handleCardDenied(error.message);
-        this.openErrorOverlay(`下载未完成：${error.message || "当前卡密已失效，请使用新卡密。"}`);
-      } else {
-        console.error("[exportPng] failed", error);
-        this.openErrorOverlay(`导出 PNG 失败：${error.message || "请稍后重试"}`);
-      }
+      console.error("[exportPng] failed", error);
+      this.openErrorOverlay(`导出 PNG 失败：${error.message || "请稍后重试"}`);
     } finally {
       this.setData({ exportBusy: false });
       this.hideExportProgress();
@@ -1940,18 +1869,13 @@ Page({
 
   async exportCsv() {
     if (!this.cells.length) return;
-    if (!this.hasPaidAccess()) {
-      this.queueProtectedAction(() => this.exportCsv());
-      this.setRedeemMessage("请先兑换卡密，解锁下载权限后再导出 CSV 清单。", "error");
-      return;
-    }
     if (this.downloadRemaining <= 0) {
       this.queueProtectedAction(() => this.exportCsv());
-      this.setRedeemMessage("当前卡密下载次数已用完，请兑换新卡密。", "error");
+      this.setUnlockMessage(this.hasAccess() ? "下载额度已用完，看广告可继续下载 CSV 清单。" : "看广告解锁后即可下载 CSV 清单。", "error");
       return;
     }
     if (!this.sourceFingerprint) {
-      this.setRedeemMessage("未识别到当前图片，请重新上传后再试。", "error");
+      this.setUnlockMessage("未识别到当前图片，请重新上传后再试。", "error");
       return;
     }
     console.log("[exportCsv] start", { cols: this.cols, rows: this.rows });
@@ -1992,13 +1916,8 @@ Page({
       await this.loadAccessStatus();
       this.setData({ statusText: "导出开始，正在下载…", statusState: "working" });
     } catch (error) {
-      if (this.isCardDeniedError(error)) {
-        this.handleCardDenied(error.message);
-        this.openErrorOverlay(`导出未完成：${error.message || "当前卡密已失效，请使用新卡密。"}`);
-      } else {
-        console.error("[exportCsv] failed", error);
-        this.openErrorOverlay(`导出 CSV 失败：${error.message || "请稍后重试"}`);
-      }
+      console.error("[exportCsv] failed", error);
+      this.openErrorOverlay(`导出 CSV 失败：${error.message || "请稍后重试"}`);
     } finally {
       this.setData({ exportBusy: false });
       this.hideExportProgress();
@@ -2616,15 +2535,6 @@ Page({
     }
     wx.showLoading({ title: "提交中", mask: true });
     try {
-      // 先校验是否为管理密码（密钥只存在于云函数环境变量，不暴露到客户端）
-      const verify = await callFunction("card-admin", { action: "verify", adminKey: content });
-      if (verify && verify.ok) {
-        wx.setStorageSync("pixelbeansAdminKey", content);
-        wx.hideLoading();
-        wx.navigateTo({ url: "/pages/admin/admin" });
-        return;
-      }
-      // 普通意见反馈
       const res = await callFunction("feedback", { content });
       wx.hideLoading();
       if (res && res.success) {

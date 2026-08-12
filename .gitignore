@@ -4,6 +4,3 @@ miniprogram_npm/
 *.log
 .DS_Store
 .git-backup-*/
-
-# 卡密/用户数据快照禁止入库
-docs/cards-import*
