@@ -101,7 +101,7 @@ async function submitTask(OPENID, event) {
   const consumed = await consumeAiCredit(OPENID);
   await recordTask({ taskId, OPENID, imageHash });
   console.log("[ai-optimize] submitted", { taskId, consumed });
-  return { success: true, taskId, submitted: true, ...(await getUnlockPayload(OPENID)) };
+  return { success: true, taskId, submitted: true, version: 2, ...(await getUnlockPayload(OPENID)) };
 }
 
 async function checkTask(OPENID, event) {
@@ -130,7 +130,7 @@ async function checkTask(OPENID, event) {
     };
   }
   if (task.status === "failed") {
-    return { success: false, failed: true, message: task.message || "AI 优化任务失败，请重试。" };
+    return { success: false, failed: true, version: 2, message: task.message || "AI 优化任务失败，请重试。" };
   }
 
   let poll;
@@ -139,10 +139,10 @@ async function checkTask(OPENID, event) {
   } catch (error) {
     // 网络抖动等瞬时错误：让客户端稍后继续轮询
     console.error("[ai-optimize] poll error", { taskId, error: error && error.message });
-    return { success: false, pending: true };
+    return { success: false, pending: true, version: 2, pollError: (error && error.message) || "" };
   }
   if (poll.status === "processing") {
-    return { success: false, pending: true };
+    return { success: false, pending: true, version: 2 };
   }
   if (poll.status === "failed") {
     try {
@@ -152,7 +152,7 @@ async function checkTask(OPENID, event) {
     } catch (error) {
       console.error("[ai-optimize] mark failed error", error);
     }
-    return { success: false, failed: true, message: poll.message || "AI 优化任务失败，请重试。" };
+    return { success: false, failed: true, version: 2, message: poll.message || "AI 优化任务失败，请重试。" };
   }
 
   const imageFileID = await uploadImageResult(poll.imageDataUrl, taskId);
@@ -174,14 +174,15 @@ async function checkTask(OPENID, event) {
         imageFileID: (again.data && again.data.imageFileID) || imageFileID,
         taskId,
         done: true,
+        version: 2,
         ...(await getUnlockPayload(OPENID)),
       };
     } catch (error) {
-      return { success: true, imageFileID, taskId, done: true, ...(await getUnlockPayload(OPENID)) };
+      return { success: true, imageFileID, taskId, done: true, version: 2, ...(await getUnlockPayload(OPENID)) };
     }
   }
 
-  return { success: true, imageFileID, taskId, ...(await getUnlockPayload(OPENID)) };
+  return { success: true, imageFileID, taskId, version: 2, ...(await getUnlockPayload(OPENID)) };
 }
 
 // AI 优化：action=submit 提交任务并立即返回 taskId；action=check 轮询结果（幂等扣减）

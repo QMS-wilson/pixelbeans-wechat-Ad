@@ -1,7 +1,8 @@
 {
   "pages": [
     "pages/index/index",
-    "pages/feedback-success/feedback-success"
+    "pages/feedback-success/feedback-success",
+    "pages/share/share"
   ],
   "window": {
     "navigationBarTitleText": "像素工坊 - 拼豆图纸",

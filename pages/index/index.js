@@ -96,7 +96,9 @@ Page({
     downloadRemaining: 0,
   },
 
-  onLoad() {
+  onLoad(options) {
+    this.importShareId = String((options && options.import) || "").trim();
+    this._pageDestroyed = false;
     // 大体积状态放到非响应式实例属性，避免 setData 性能问题
     this.cells = [];
     this.cols = 64;
@@ -139,9 +141,38 @@ Page({
   onReady() {
     this.initAllCanvases().then(() => {
       this.renderCanvas();
-      this.restorePatternFromStorage();
+      if (this.importShareId) {
+        this.importShareToCanvas(this.importShareId);
+      } else {
+        this.restorePatternFromStorage();
+      }
       this.loadAccessStatus();
     });
+  },
+
+  onShow() {
+    // 从后台返回时若 AI 遮罩仍在，恢复等待计时器
+    if (this.data.aiOverlayVisible && !this.aiWaitTimer) {
+      this.startAiWaitTimer();
+    }
+  },
+
+  onHide() {
+    // 切后台时停止 AI 等待计时器，避免页面销毁后 interval 回调仍执行
+    this.clearAiWaitTimer();
+  },
+
+  onUnload() {
+    this._pageDestroyed = true;
+    this.clearAiWaitTimer();
+    if (this._saveTimer) {
+      clearTimeout(this._saveTimer);
+      this._saveTimer = null;
+    }
+    if (this._compareToggleTimer) {
+      clearTimeout(this._compareToggleTimer);
+      this._compareToggleTimer = null;
+    }
   },
 
   // ---------- 画布初始化 ----------
@@ -192,6 +223,7 @@ Page({
     this.clearAiWaitTimer();
     const startAt = Date.now();
     const tick = () => {
+      if (this._pageDestroyed) return;
       const seconds = Math.floor((Date.now() - startAt) / 1000);
       this.setData({ aiWaitText: `已等待 ${seconds} 秒，通常需要 30 秒 ~ 2 分钟` });
     };
@@ -842,7 +874,9 @@ Page({
     this.aiOptimizeInFlightKey = cacheKey;
     this.aiOptimizeInFlightPromise = (async () => {
       // 大图分块上传到云存储，避免 callFunction 入参超限 / 直传断流
+      console.log("[optimizeImageWithAI] upload chunks start", { base64Length: imageBase64.length });
       const { uploadId: imageUploadId, ext: imageExt } = await uploadDataChunks(imageBase64, "ai-input");
+      console.log("[optimizeImageWithAI] chunks uploaded", { imageUploadId, imageExt });
       const submitResult = await requestJson("/api/ai-optimize", {
         method: "POST",
         data: {
@@ -858,24 +892,52 @@ Page({
         error.status = submitResult && submitResult.statusCode;
         throw error;
       }
+      if (submitResult.version !== 2) {
+        throw new Error("检测到 ai-optimize 云函数为旧版本：请先在微信开发者工具中重新部署 ai-optimize 云函数后再试。");
+      }
+      console.log("[optimizeImageWithAI] submitted", { taskId, version: submitResult.version });
       this.syncAccessState(submitResult);
       // 云函数版：提交后返回 taskId，由前端轮询 action=check，避免云函数 60s 超时限制
       const pollStartedAt = Date.now();
+      let pollAttempt = 0;
+      let consecutiveErrors = 0;
       for (;;) {
         if (myToken !== this.processToken) throw new Error("AI 优化已取消");
         if (Date.now() - pollStartedAt > 180000) throw new Error("AI 优化超时，请稍后重试。");
         let check = null;
+        pollAttempt += 1;
         try {
           check = await requestJson("/api/ai-optimize", {
             method: "POST",
             data: { action: "check", taskId },
           });
+          consecutiveErrors = 0;
         } catch (error) {
-          console.warn("[optimizeImageWithAI] poll error, retrying", error);
+          consecutiveErrors += 1;
+          console.warn("[optimizeImageWithAI] poll error", {
+            taskId,
+            pollAttempt,
+            consecutiveErrors,
+            error: error && error.message,
+          });
+          if (consecutiveErrors >= 3) {
+            throw new Error(`AI 任务查询连续失败，请稍后重试（${(error && error.message) || "云函数调用失败"}）`);
+          }
           await new Promise((resolve) => setTimeout(resolve, 3000));
           continue;
         }
+        if (pollAttempt % 5 === 0 || check.pending || check.failed) {
+          console.log("[optimizeImageWithAI] poll", {
+            taskId,
+            pollAttempt,
+            pending: !!check.pending,
+            success: !!check.success,
+            failed: !!check.failed,
+            message: (check && check.message) || "",
+          });
+        }
         if (check && check.success && check.imageFileID) {
+          console.log("[optimizeImageWithAI] done", { taskId, pollAttempt, imageFileID: check.imageFileID });
           this.syncAccessState(check);
           const downloadResult = await new Promise((resolve, reject) => {
             wx.cloud.downloadFile({
@@ -890,11 +952,15 @@ Page({
           return optimizedImage;
         }
         if (check && check.failed) {
+          console.error("[optimizeImageWithAI] task failed", { taskId, pollAttempt, message: check.message });
           throw new Error((check && check.message) || "AI 优化任务失败，请重试。");
         }
         await new Promise((resolve) => setTimeout(resolve, 3000));
       }
     })();
+    this.aiOptimizeInFlightPromise.catch((error) => {
+      console.error("[optimizeImageWithAI] rejected", { cacheKey, error: (error && error.stack) || error });
+    });
 
     try {
       return await this.aiOptimizeInFlightPromise;
@@ -2523,6 +2589,171 @@ Page({
       },
     });
   },
+  // ---------- 图纸分享 ----------
+  writeShareTempFile(project) {
+    const fs = wx.getFileSystemManager();
+    const filePath = `${wx.env.USER_DATA_PATH}/share-${project.id}.json`;
+    fs.writeFileSync(filePath, JSON.stringify(project), "utf8");
+    return filePath;
+  },
+
+  uploadShareFile(localPath, cloudPath) {
+    return new Promise((resolve, reject) => {
+      wx.cloud.uploadFile({
+        cloudPath,
+        filePath: localPath,
+        success: resolve,
+        fail: (err) => reject(new Error((err && err.errMsg) || "云存储上传失败")),
+      });
+    });
+  },
+
+  // 创建当前图纸的分享快照：上传原图/预处理图/图纸 JSON 到暂存区，
+  // 云函数 share-pattern 复制到 shares/ 目录并生成分享链接（接收方可直接查看）
+  async createShareSnapshot() {
+    if (!this.cells.length) return null;
+    const stageId = `stage${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+    const project = {
+      id: stageId,
+      name: `拼豆图纸 ${this.cols}x${this.rows}`,
+      savedAt: Date.now(),
+      cols: this.cols,
+      rows: this.rows,
+      paletteIndex: this.data.paletteIndex,
+      gridSize: this.data.gridSize,
+      mergeLevel: this.data.mergeLevel,
+      gridLineOn: this.data.gridLineOn,
+      sourceFingerprint: this.sourceFingerprint || "",
+      sourceType: this.sourceType || "blank",
+      selectedColorCode: this.selectedColorCode || "",
+      cells: this.cells,
+    };
+    const jsonPath = this.writeShareTempFile(project);
+    const jsonUpload = await this.uploadShareFile(jsonPath, `share-staging/${stageId}.json`);
+    const originalPath = this.originalImage ? this.cacheImageFile(`share-original-${stageId}`, this.originalImage) : "";
+    const previewPath =
+      this.image && this.image !== this.originalImage ? this.cacheImageFile(`share-preview-${stageId}`, this.image) : "";
+    const [origUpload, prevUpload] = await Promise.all([
+      originalPath ? this.uploadShareFile(originalPath, `share-staging/${stageId}-original.png`) : Promise.resolve(null),
+      previewPath ? this.uploadShareFile(previewPath, `share-staging/${stageId}-preview.png`) : Promise.resolve(null),
+    ]);
+    const res = await callFunction("share-pattern", {
+      action: "create",
+      id: stageId,
+      name: project.name,
+      savedAt: project.savedAt,
+      cols: project.cols,
+      rows: project.rows,
+      paletteIndex: project.paletteIndex,
+      gridSize: project.gridSize,
+      mergeLevel: project.mergeLevel,
+      gridLineOn: project.gridLineOn,
+      sourceFingerprint: project.sourceFingerprint,
+      sourceType: project.sourceType,
+      selectedColorCode: project.selectedColorCode,
+      jsonFileID: jsonUpload.fileID,
+      originalFileID: (origUpload && origUpload.fileID) || "",
+      previewFileID: (prevUpload && prevUpload.fileID) || "",
+      paid: this.unlocked,
+    });
+    if (!res || !res.success || !res.path) {
+      throw new Error((res && res.message) || "分享创建失败");
+    }
+    return res;
+  },
+
+  onShareAppMessage() {
+    const ready = Boolean(this.cells && this.cells.length) && !this.data.exportBusy && !this.data.aiOverlayVisible;
+    const fallback = { title: "拼豆图纸生成器 - 像素工坊", path: "/pages/index/index" };
+    if (!ready) return fallback;
+    // 基础库 2.12.0+ 支持 onShareAppMessage 返回 Promise：先创建分享快照，再返回带 shareId 的路径
+    return new Promise((resolve) => {
+      this.createShareSnapshot()
+        .then((result) => {
+          resolve({
+            title: `拼豆图纸 ${this.cols}x${this.rows}，快来查看！`,
+            path: result.path,
+          });
+        })
+        .catch((error) => {
+          console.error("[share] create snapshot failed", error);
+          const shareError = (error && error.message) || "";
+          if (/FUNCTION_NOT_FOUND|FunctionName parameter could not be found/.test(shareError)) {
+            this.toast("分享功能未部署：请先部署 share-pattern 云函数");
+          } else {
+            this.toast("分享创建失败，请重试");
+          }
+          resolve(fallback);
+        });
+    });
+  },
+
+  // 被分享者从分享页点击「导入并继续编辑」：把分享图纸载入当前画布
+  async importShareToCanvas(shareId) {
+    if (!shareId) return;
+    wx.showLoading({ title: "导入中…", mask: true });
+    try {
+      const res = await callFunction("share-pattern", { action: "get", shareId });
+      if (!res || !res.success || !res.share) {
+        throw new Error((res && res.message) || "分享不存在或已失效。");
+      }
+      const share = res.share;
+      const [cells, originalImage, previewImage] = await Promise.all([
+        this.downloadProjectCells({ fileID: share.fileID }),
+        this.downloadProjectImage(share.originalFileID),
+        this.downloadProjectImage(share.previewFileID),
+      ]);
+      if (!Array.isArray(cells) || !cells.length) {
+        throw new Error("图纸数据不完整，无法导入。");
+      }
+      if (!PALETTE_KEYS[share.paletteIndex]) {
+        throw new Error("该图纸使用的色板不存在，无法导入。");
+      }
+      this.setData({
+        paletteIndex: share.paletteIndex,
+        paletteLabel: PALETTE_OPTIONS[share.paletteIndex] ? PALETTE_OPTIONS[share.paletteIndex].label : this.data.paletteLabel,
+        gridSize: share.gridSize || this.data.gridSize,
+        mergeLevel: share.mergeLevel || this.data.mergeLevel,
+        gridLineOn: share.gridLineOn !== undefined ? share.gridLineOn : this.data.gridLineOn,
+      });
+      if (share.selectedColorCode && this.getActivePalette().some((color) => color.code === share.selectedColorCode)) {
+        this.selectedColorCode = share.selectedColorCode;
+      }
+      this.isDrawing = false;
+      this.renderMetrics = null;
+      this.cells = cells;
+      this.cols = share.cols || (cells[0] || []).length;
+      this.rows = share.rows || cells.length;
+      this.sourceFingerprint = share.sourceFingerprint || "";
+      this.sourceType = share.sourceType || "blank";
+      this.originalImage = originalImage || null;
+      this.image = previewImage || originalImage || null;
+      this.history = [];
+      this.redoHistory = [];
+      this.aiOptimizeCacheKey = "";
+      this.aiOptimizeCacheImage = null;
+      this.renderEditorPalette();
+      this.recomputeCounts();
+      this.renderCanvas();
+      this.updateComparePreview(this.originalImage, this.image || this.originalImage);
+      this.syncUiSummary();
+      this.updateEditorActions();
+      this.schedulePatternSave();
+      this.setData({
+        sourceType: this.sourceType,
+        showClearHint: false,
+        canvasHint: `已导入分享的图纸「${share.name || "拼豆图纸"}」，可继续编辑。`,
+        statusText: "分享图纸已导入",
+        statusState: "ready",
+      });
+    } catch (error) {
+      console.error("[share] import failed", error);
+      this.openErrorOverlay(`导入分享失败：${error.message || "请稍后重试"}`);
+    } finally {
+      wx.hideLoading();
+    }
+  },
+
   onFeedbackInput(e) {
     this.setData({ feedbackInput: e.detail.value });
   },

@@ -171,6 +171,7 @@
         <button class="action-btn primary" disabled="{{exportBusy || cellsEmpty || (unlocked && downloadRemaining <= 0)}}" bindtap="exportCodePng">下载带 Code 图纸</button>
         <button class="action-btn secondary" disabled="{{exportBusy || cellsEmpty || (unlocked && downloadRemaining <= 0)}}" bindtap="exportCleanPng">下载无 Code 图纸</button>
         <button class="action-btn secondary" disabled="{{exportBusy || cellsEmpty || (unlocked && downloadRemaining <= 0)}}" bindtap="exportCsvTap">下载 CSV 清单</button>
+        <button class="action-btn secondary" open-type="share" disabled="{{exportBusy || cellsEmpty}}">分享图纸</button>
       </view>
     </view>
   </view>

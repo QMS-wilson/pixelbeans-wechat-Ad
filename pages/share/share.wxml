@@ -1,0 +1,46 @@
+<view class="page">
+  <view class="head">
+    <text class="title">拼豆图纸</text>
+    <text class="back" bindtap="goHome">返回首页</text>
+  </view>
+
+  <view wx:if="{{loading}}" class="center-state">
+    <view class="spinner"></view>
+    <text class="state-sub">正在加载分享…</text>
+  </view>
+
+  <view wx:elif="{{error}}" class="center-state">
+    <text class="error-title">无法查看分享</text>
+    <text class="state-sub">{{error}}</text>
+    <button class="btn primary" bindtap="goHome">返回首页</button>
+  </view>
+
+  <block wx:else>
+    <view class="share-meta">
+      <text class="share-name">{{name}}</text>
+      <text class="share-sub">{{metaText}}</text>
+      <text class="share-sub warn" wx:if="{{!paid}}">未付款预览（图片带水印）</text>
+    </view>
+
+    <view class="compare-panel">
+      <view class="compare-item">
+        <text class="compare-label">原图</text>
+        <canvas type="2d" id="shareOriginalCanvas" class="thumb-canvas"></canvas>
+      </view>
+      <view class="compare-item">
+        <text class="compare-label">预处理图</text>
+        <canvas type="2d" id="shareProcessedCanvas" class="thumb-canvas"></canvas>
+      </view>
+    </view>
+
+    <view class="canvas-panel">
+      <text class="canvas-label">图纸网格</text>
+      <canvas type="2d" id="shareCanvas" class="share-canvas"></canvas>
+    </view>
+
+    <view class="share-actions">
+      <button class="btn primary" bindtap="importToCanvas">导入并继续编辑</button>
+      <button class="btn ghost" bindtap="goHome">返回首页</button>
+    </view>
+  </block>
+</view>

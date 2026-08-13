@@ -220,17 +220,25 @@ function httpsRequest(options, body) {
   });
 }
 
-function normalizeProviderError(status, text) {
-  if (text.includes("50430") || text.includes("Concurrent Limit")) {
+function normalizeProviderError(status, text, data) {
+  const rawMessage = String((data && (data.message || data.error)) || "");
+  const raw = `${rawMessage} ${text}`;
+  if (/余额不足|欠费|arrears|insufficient.*balance|balance.*insufficient|payment required|\b402\b/i.test(raw)) {
+    return `AI 接口余额不足或账户欠费，请联系管理员充值后重试（接口返回：${(rawMessage || text).slice(0, 300)}）`;
+  }
+  if (text.includes("50430") || /concurrent limit/i.test(raw)) {
     return "当前已有 AI 优化任务在处理中，请等待一个任务完成后再试。";
   }
-  if (text.includes("50400") || text.includes("Access Denied")) {
-    return "鉴权失败，请确认 AccessKey/SecretKey 配置正确，并已开通 jimeng_t2i_v40 权限。";
+  if (text.includes("50400") || /access denied|鉴权失败|invalid access/i.test(raw)) {
+    return `AI 接口鉴权失败，请确认 VOLC_ACCESS_KEY_ID / VOLC_SECRET_ACCESS_KEY 配置正确，并已开通 jimeng_t2i_v40 权限（接口返回：${(rawMessage || text).slice(0, 300)}）`;
   }
-  if (text.includes("50411") || text.includes("Risk")) {
+  if (text.includes("50411") || /risk|内容安全|违规/i.test(raw)) {
     return "图片未通过内容安全检测，请更换一张图片后再试。";
   }
-  return `AI 优化接口失败：${status} ${text}`;
+  if (status === 429 || /throttl|限流|too many request/i.test(raw)) {
+    return "AI 接口请求过于频繁，请稍后再试。";
+  }
+  return `AI 优化接口失败（HTTP ${status}）：${(rawMessage || text).slice(0, 500)}`;
 }
 
 async function callVolc(action, requestBody) {
@@ -259,6 +267,12 @@ async function callVolc(action, requestBody) {
     },
     body,
   );
+  console.log("[callVolc] response", {
+    action,
+    httpStatus: response.status,
+    bodyLength: response.text.length,
+    bodyHead: response.text.slice(0, 2000),
+  });
   if (response.status !== 200) {
     throw new Error(normalizeProviderError(response.status, response.text));
   }
@@ -266,10 +280,17 @@ async function callVolc(action, requestBody) {
   try {
     data = JSON.parse(response.text);
   } catch {
-    throw new Error(`AI 优化接口返回异常：${response.text}`);
+    throw new Error(`AI 优化接口返回异常：${response.text.slice(0, 500)}`);
   }
-  if (data.status && data.status !== 10000) {
-    throw new Error(normalizeProviderError(response.status, response.text));
+  // 火山引擎业务码在 code 字段（个别版本为 status），code != 10000 即业务失败
+  const bizCode = data.code !== undefined ? data.code : data.status;
+  if (bizCode !== undefined && String(bizCode) !== "10000") {
+    console.error("[callVolc] business error", {
+      action,
+      bizCode,
+      message: (data && data.message) || response.text.slice(0, 500),
+    });
+    throw new Error(normalizeProviderError(response.status, response.text, data));
   }
   return data;
 }
@@ -305,7 +326,10 @@ async function submitImageTask(imageBase64, prompt = DEFAULT_PROMPT) {
   });
   const taskId = submitResult.data?.task_id || submitResult.task_id;
   console.log("[submitImageTask] submitted", { taskId, promptLength: String(prompt || "").length });
-  if (!taskId) throw new Error("AI 优化任务提交失败：未返回 task_id。");
+  if (!taskId) {
+    console.error("[submitImageTask] missing task_id", JSON.stringify(submitResult).slice(0, 1000));
+    throw new Error(`AI 优化任务提交失败：未返回 task_id（接口响应：${JSON.stringify(submitResult).slice(0, 500)}）`);
+  }
   return taskId;
 }
 
@@ -317,6 +341,13 @@ async function pollImageTask(taskId) {
     req_json: JSON.stringify({ return_url: true }),
   });
   const taskStatus = result.data?.task_status || result.data?.status;
+  console.log("[pollImageTask] result", {
+    taskId,
+    taskStatus,
+    hasImageUrl: !!(result.data?.images?.[0]?.url || result.data?.image_urls?.[0]),
+    hasBase64: !!result.data?.binary_data_base64?.[0],
+    message: (result && result.message) || "",
+  });
   if (taskStatus === "success" || taskStatus === "done") {
     const imageUrl = result.data?.images?.[0]?.url || result.data?.image_urls?.[0];
     const imageBase64Result = result.data?.binary_data_base64?.[0];
