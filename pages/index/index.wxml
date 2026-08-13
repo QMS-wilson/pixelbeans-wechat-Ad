@@ -1,6 +1,6 @@
 <view class="page {{overlayOpen ? 'overlay-open' : ''}}">
   <view class="site-header">
-    <view class="brand" bindtap="openProfileModal">
+    <view class="brand">
       <view class="brand-mark">
         <image wx:if="{{profileReady}}" class="brand-avatar" src="{{avatarUrl}}" mode="aspectFill"></image>
         <text wx:else>PX</text>

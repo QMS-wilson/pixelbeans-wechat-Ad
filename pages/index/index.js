@@ -165,6 +165,7 @@ Page({
         this.restorePatternFromStorage();
       }
       this.loadAccessStatus();
+      this.autoPromptProfile();
     });
   },
 
@@ -582,6 +583,12 @@ Page({
     } catch (error) {
       return false;
     }
+  },
+
+  // 打开小程序时自动弹窗提醒授权获取头像昵称（已设置则不再打扰）
+  autoPromptProfile() {
+    if (this.profileReady || this._pageDestroyed) return;
+    this.openProfileModal();
   },
 
   openProfileModal() {
