@@ -585,10 +585,21 @@ Page({
     }
   },
 
-  // 打开小程序时自动弹窗提醒授权获取头像昵称（已设置则不再打扰）
+  // 打开小程序时弹出统一的授权提醒：授权后展示头像昵称，拒绝则保持原样
   autoPromptProfile() {
-    if (this.profileReady || this._pageDestroyed) return;
-    this.openProfileModal();
+    if (this.profileReady || this._pageDestroyed || this._profilePrompted) return;
+    this._profilePrompted = true;
+    wx.showModal({
+      title: "授权提醒",
+      content: "是否允许获取您的头像和昵称？授权后将展示在页面顶部，拒绝后保持原样。",
+      confirmText: "允许",
+      cancelText: "拒绝",
+      success: (res) => {
+        if (res && res.confirm) {
+          this.openProfileModal();
+        }
+      },
+    });
   },
 
   openProfileModal() {
