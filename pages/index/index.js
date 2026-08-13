@@ -11,6 +11,8 @@ const MAX_CANVAS_DIMENSION = 30000;
 const MAX_CANVAS_PIXELS = 200000000;
 const PATTERN_STORAGE_KEY = "pixelWorkshopPattern";
 const PROJECTS_STORAGE_KEY = "pixelWorkshopProjects";
+const PROFILE_AVATAR_KEY = "pixelWorkshopAvatar";
+const PROFILE_NICKNAME_KEY = "pixelWorkshopNickname";
 
 // AI 提示词快捷风格模板
 const AI_PROMPT_PRESETS = [
@@ -94,6 +96,12 @@ Page({
     showClearHint: false,
     aiOptimizeRemaining: 0,
     downloadRemaining: 0,
+    profileReady: false,
+    avatarUrl: "",
+    nickname: "",
+    profileModalVisible: false,
+    avatarTemp: "",
+    nicknameInput: "",
   },
 
   onLoad(options) {
@@ -132,6 +140,16 @@ Page({
     this._rewardedAd = null;
     this._saveTimer = null;
     this.aiWaitTimer = null;
+
+    // 头像昵称：仅在两者都获取成功时启用个性化页头，否则保持原样
+    this.avatarUrl = wx.getStorageSync(PROFILE_AVATAR_KEY) || "";
+    this.nickname = wx.getStorageSync(PROFILE_NICKNAME_KEY) || "";
+    this.profileReady = Boolean(this.avatarUrl && this.nickname) && this.localFileExists(this.avatarUrl);
+    this.setData({
+      profileReady: this.profileReady,
+      avatarUrl: this.avatarUrl,
+      nickname: this.nickname,
+    });
 
     this.setData({ aiPrompt: this.confirmedAiPrompt });
     this.renderEditorPalette();
@@ -287,6 +305,7 @@ Page({
       this.data.aiOverlayVisible ||
       this.data.preprocessVisible ||
       this.data.unlockModalVisible ||
+      this.data.profileModalVisible ||
       this.data.errorVisible ||
       this.data.csvPreviewVisible;
     const changed = open !== this.data.overlayOpen;
@@ -552,6 +571,79 @@ Page({
   closeUnlockModal() {
     this.setData({ unlockModalVisible: false });
     this.syncOverlayState();
+  },
+
+  // ---------- 头像昵称 ----------
+  localFileExists(path) {
+    if (!path || /^https?:|^cloud:\/\//.test(path)) return true;
+    try {
+      wx.getFileSystemManager().accessSync(path);
+      return true;
+    } catch (error) {
+      return false;
+    }
+  },
+
+  openProfileModal() {
+    this.setData({
+      profileModalVisible: true,
+      avatarTemp: this.avatarUrl,
+      nicknameInput: this.nickname,
+    });
+    this.syncOverlayState();
+  },
+
+  closeProfileModal() {
+    this.setData({ profileModalVisible: false });
+    this.syncOverlayState();
+  },
+
+  onChooseAvatar(e) {
+    const avatarUrl = e.detail && e.detail.avatarUrl;
+    if (!avatarUrl) return;
+    this.setData({ avatarTemp: avatarUrl });
+  },
+
+  onNicknameInput(e) {
+    this.setData({ nicknameInput: (e.detail && e.detail.value) || "" });
+  },
+
+  // 把临时头像复制到本地用户目录，避免小程序重启后临时文件失效
+  persistAvatar(avatarUrl) {
+    try {
+      const fs = wx.getFileSystemManager();
+      const extMatch = String(avatarUrl).match(/\.(png|jpg|jpeg|webp)$/i);
+      const ext = extMatch ? extMatch[1].toLowerCase() : "png";
+      const dest = `${wx.env.USER_DATA_PATH}/avatar-${Date.now()}.${ext}`;
+      fs.copyFileSync(avatarUrl, dest);
+      return dest;
+    } catch (error) {
+      console.warn("[profile] persist avatar failed", error);
+      return "";
+    }
+  },
+
+  saveProfile() {
+    const avatarUrl = this.data.avatarTemp || "";
+    const nickname = (this.data.nicknameInput || "").trim();
+    if (!avatarUrl || !nickname) {
+      this.toast("请先选择头像并填写昵称");
+      return;
+    }
+    const savedAvatar = this.persistAvatar(avatarUrl);
+    this.avatarUrl = savedAvatar || avatarUrl;
+    this.nickname = nickname;
+    this.profileReady = true;
+    wx.setStorageSync(PROFILE_AVATAR_KEY, this.avatarUrl);
+    wx.setStorageSync(PROFILE_NICKNAME_KEY, nickname);
+    this.setData({
+      profileReady: true,
+      avatarUrl: this.avatarUrl,
+      nickname,
+      profileModalVisible: false,
+    });
+    this.syncOverlayState();
+    this.toast("已保存头像与昵称");
   },
 
   // 广告位未配置时返回 null，前端提示“即将上线”
