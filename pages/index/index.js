@@ -140,6 +140,8 @@ Page({
     this._rewardedAd = null;
     this._saveTimer = null;
     this.aiWaitTimer = null;
+    this._shareImagePath = "";
+    this._shareImageTimer = null;
 
     // 头像昵称：仅在两者都获取成功时启用个性化页头，否则保持原样
     this.avatarUrl = wx.getStorageSync(PROFILE_AVATAR_KEY) || "";
@@ -2167,6 +2169,43 @@ Page({
   schedulePatternSave() {
     if (this._saveTimer) clearTimeout(this._saveTimer);
     this._saveTimer = setTimeout(() => this.savePatternToStorage(), 400);
+    this.scheduleShareImage();
+  },
+
+  // 生成分享卡片图：把当前预览画布（拼豆图纸）导出为本地小图并缓存路径，供分享菜单使用
+  prepareShareImage() {
+    if (!this.preview || !this.preview.canvas || !this.preview.canvas.width || !this.preview.canvas.height) return;
+    const canvasWidth = this.preview.canvas.width;
+    const canvasHeight = this.preview.canvas.height;
+    const destWidth = Math.min(640, canvasWidth);
+    const destHeight = Math.max(1, Math.floor((destWidth * canvasHeight) / canvasWidth));
+    wx.canvasToTempFilePath({
+      canvas: this.preview.canvas,
+      x: 0,
+      y: 0,
+      width: canvasWidth,
+      height: canvasHeight,
+      destWidth,
+      destHeight,
+      fileType: "jpg",
+      quality: 0.9,
+      success: (res) => {
+        if (res && res.tempFilePath) {
+          this._shareImagePath = res.tempFilePath;
+        }
+      },
+      fail: () => {
+        // 生成失败时保持旧图，分享使用页面默认截图
+      },
+    });
+  },
+
+  scheduleShareImage() {
+    if (this._shareImageTimer) clearTimeout(this._shareImageTimer);
+    this._shareImageTimer = setTimeout(() => {
+      this._shareImageTimer = null;
+      this.prepareShareImage();
+    }, 600);
   },
 
   restorePatternFromStorage() {
@@ -2764,6 +2803,7 @@ Page({
     return {
       title: `拼豆图纸 ${this.cols}x${this.rows}，快来查看！`,
       path: `/pages/share/share?shareId=${shareId}`,
+      ...(this._shareImagePath ? { imageUrl: this._shareImagePath } : {}),
     };
   },
 
