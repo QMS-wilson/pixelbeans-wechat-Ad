@@ -1,5 +1,5 @@
 const { BEAD_PALETTES } = require("../../utils/palettes");
-const { API_BASE, requestJson, callFunction, uploadDataChunks } = require("../../utils/api");
+const { API_BASE, requestJson, callFunction } = require("../../utils/api");
 const { sha256Bytes } = require("../../utils/sha256");
 const { base64ToBytes, arrayBufferToUtf8 } = require("../../utils/image");
 const config = require("../../config.js");
@@ -9,6 +9,9 @@ const DEFAULT_AI_PROMPT =
 const MAX_IMPORT_FILE_SIZE = 12 * 1024 * 1024;
 const MAX_CANVAS_DIMENSION = 30000;
 const MAX_CANVAS_PIXELS = 200000000;
+const IMPORT_MAX_SIDE = 2048;
+const AI_INPUT_MAX_SIDE = 2048;
+const CACHE_MAX_SIDE = 1280;
 const PATTERN_STORAGE_KEY = "pixelWorkshopPattern";
 const PROJECTS_STORAGE_KEY = "pixelWorkshopProjects";
 const PROFILE_AVATAR_KEY = "pixelWorkshopAvatar";
@@ -732,15 +735,34 @@ Page({
 
   computeFileFingerprint(filePath) {
     return new Promise((resolve) => {
-      wx.getFileSystemManager().readFile({
-        filePath,
-        encoding: "base64",
-        success: (res) => {
-          try {
-            resolve(sha256Bytes(base64ToBytes(res.data)));
-          } catch {
-            resolve(`file:${filePath}:${Date.now()}`);
-          }
+      const fs = wx.getFileSystemManager();
+      const finish = (sampleBase64, size) => {
+        try {
+          resolve(`${sha256Bytes(base64ToBytes(sampleBase64))}:${size}`);
+        } catch {
+          resolve(`file:${filePath}:${Date.now()}`);
+        }
+      };
+      fs.stat({
+        path: filePath,
+        success: (st) => {
+          const size = (st && st.stats && st.stats.size) || 0;
+          // 只读取文件头部采样，避免大文件整体 base64 解码阻塞页面
+          fs.readFile({
+            filePath,
+            encoding: "base64",
+            position: 0,
+            length: Math.min(size || 512 * 1024, 512 * 1024),
+            success: (res) => finish(res.data, size),
+            fail: () => {
+              fs.readFile({
+                filePath,
+                encoding: "base64",
+                success: (res2) => finish(res2.data, size),
+                fail: () => resolve(`file:${filePath}:${Date.now()}`),
+              });
+            },
+          });
         },
         fail: () => resolve(`file:${filePath}:${Date.now()}`),
       });
@@ -754,11 +776,15 @@ Page({
       : () => wx.createImage();
     const image = createImage();
     image.onload = async () => {
-      this.originalImage = image;
-      this.image = image;
+      // 大图先压到合理分辨率：最终只用于网格采样 / AI 输入，2048px 已足够，
+      // 避免全尺寸解码驻留内存导致卡顿或加载失败
+      const limited = await this.limitSourceImage(image);
+      const source = limited.image;
+      this.originalImage = source;
+      this.image = source;
       this.sourceName = filePath.split("/").pop() || "image";
       this.sourceType = "image";
-      this.sourceFingerprint = await this.computeFileFingerprint(filePath);
+      this.sourceFingerprint = await this.computeFileFingerprint(limited.path || filePath);
       this.aiOptimizeCacheKey = "";
       this.aiOptimizeCacheImage = null;
       this.aiOptimizeInFlightKey = "";
@@ -766,7 +792,7 @@ Page({
       this.setData({
         sourceType: "image",
         uploadTitle: "图片已载入",
-        uploadHint: `${image.width} x ${image.height}`,
+        uploadHint: `${source.width} x ${source.height}`,
         showAiHint: true,
         showClearHint: false,
       });
@@ -774,6 +800,29 @@ Page({
     };
     image.onerror = () => this.setError("图片解析失败，请确认文件未损坏。");
     image.src = filePath;
+  },
+
+  // 大图限分辨率：超过上限时缩到最长边 maxSide，白底 JPG 输出；
+  // 返回 { image, path }，path 为空表示无需缩放
+  async limitSourceImage(image, maxSide = IMPORT_MAX_SIDE) {
+    const longSide = Math.max(image.width, image.height);
+    if (longSide <= maxSide) return { image, path: "" };
+    const scale = maxSide / longSide;
+    const width = Math.max(1, Math.round(image.width * scale));
+    const height = Math.max(1, Math.round(image.height * scale));
+    const canvas = this.createOffscreen(width, height);
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, width, height);
+    ctx.drawImage(image, 0, 0, width, height);
+    try {
+      const tempPath = await this.canvasToTemp(canvas, "jpg", 0.88);
+      const limited = await this.loadImageSource(tempPath);
+      return { image: limited, path: tempPath };
+    } catch (error) {
+      console.warn("[image] downscale failed, use original", error);
+      return { image: canvas, path: "" };
+    }
   },
 
   createBlankBoardFingerprint(cols, rows) {
@@ -929,19 +978,24 @@ Page({
 
   loadImageSource(src) {
     return new Promise((resolve, reject) => {
-      const image = this.preview.canvas.createImage();
+      const image =
+        this.preview && this.preview.canvas && this.preview.canvas.createImage
+          ? this.preview.canvas.createImage()
+          : wx.createImage();
       image.onload = () => resolve(image);
-      image.onerror = () => reject(new Error("AI 优化结果图片解析失败。"));
+      image.onerror = () => reject(new Error("图片解析失败。"));
       image.src = src;
     });
   },
 
   async buildAiSourceInfo(image) {
-    const sourceCanvas = this.normalizeSourceImage(image, 2048);
-    const imageBase64 = await this.canvasToDataUrl(sourceCanvas);
+    const sourceCanvas = this.normalizeSourceImage(image, AI_INPUT_MAX_SIDE);
+    // 直接导出本地 JPG 文件，避免 base64 大字符串驻留内存
+    const filePath = await this.canvasToTemp(sourceCanvas, "jpg", 0.88);
+    const sizeKB = await this.fileSizeKB(filePath);
     const prompt = this.confirmedAiPrompt || DEFAULT_AI_PROMPT;
-    const cacheKey = `${this.sourceName}:${image.width}x${image.height}:${imageBase64.length}:${prompt}`;
-    return { imageBase64, prompt, cacheKey };
+    const cacheKey = `${this.sourceName}:${image.width}x${image.height}:${sizeKB}:${prompt}`;
+    return { filePath, prompt, cacheKey };
   },
 
   async optimizeImageWithAI(image, aiInfo = null) {
@@ -949,7 +1003,7 @@ Page({
       throw new Error("未识别到当前图片，请重新上传后再试。");
     }
     const info = aiInfo || (await this.buildAiSourceInfo(image));
-    const { imageBase64, prompt, cacheKey } = info;
+    const { filePath: aiFilePath, prompt, cacheKey } = info;
 
     if (this.aiOptimizeCacheKey === cacheKey && this.aiOptimizeCacheImage) {
       return this.aiOptimizeCacheImage;
@@ -967,15 +1021,18 @@ Page({
 
     this.aiOptimizeInFlightKey = cacheKey;
     this.aiOptimizeInFlightPromise = (async () => {
-      // 大图分块上传到云存储，避免 callFunction 入参超限 / 直传断流
-      console.log("[optimizeImageWithAI] upload chunks start", { base64Length: imageBase64.length });
-      const { uploadId: imageUploadId, ext: imageExt } = await uploadDataChunks(imageBase64, "ai-input");
-      console.log("[optimizeImageWithAI] chunks uploaded", { imageUploadId, imageExt });
+      // 图片直接上传云存储，云函数按 fileID 读取，避免分块逐次调用云函数
+      console.log("[optimizeImageWithAI] upload file start", { aiFilePath });
+      const upload = await this.uploadCloudFile(
+        `ai-input/${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}.jpg`,
+        aiFilePath,
+      );
+      console.log("[optimizeImageWithAI] file uploaded", { fileID: upload.fileID });
       const submitResult = await requestJson("/api/ai-optimize", {
         method: "POST",
         data: {
-          imageUploadId,
-          imageExt,
+          imageFileID: upload.fileID,
+          imageExt: "jpg",
           prompt,
           imageHash: this.sourceFingerprint,
         },
@@ -1883,7 +1940,7 @@ Page({
 
   // 导出下载主流程：分块上传 → 服务端生成文件 → 下载结果 → 返回 ArrayBuffer
   // onProgress(label, percent, indeterminate)：把各阶段进度实时同步给进度浮层
-  async submitDownload({ filename, dataUrl = null, text = null, onProgress = null }) {
+  async submitDownload({ filename, filePath = null, ext = "", text = null, onProgress = null }) {
     // 阶段进度上报工具：统一把文案/百分比/动画模式传给进度浮层
     const stage = (label, percent, indeterminate) => {
       if (typeof onProgress === "function") onProgress(label, percent, indeterminate);
@@ -1893,16 +1950,18 @@ Page({
       filename: filename.replace(/\.[^/.]+$/, ""),
       imageHash: this.sourceFingerprint,
     };
-    // 大图走分块上传：按块数实时上报进度，百分比映射到 12%~67%
-    if (dataUrl) {
-      console.log("[submitDownload] chunk upload start", { dataUrlLength: dataUrl.length });
-      const { uploadId, ext } = await uploadDataChunks(dataUrl, "download", (done, total) => {
-        const percent = 12 + Math.round((done / total) * 55);
-        stage(`正在上传图纸数据（${done}/${total}）`, percent, false);
-      });
-      payload.dataUploadId = uploadId;
-      payload.dataExt = ext;
-      console.log("[submitDownload] chunk upload done", { uploadId });
+    // 图纸文件直接上传云存储，云函数按 fileID 读取；上传进度不可知，显示加载动画
+    if (filePath) {
+      console.log("[submitDownload] upload file start", { filePath });
+      stage("正在上传图纸数据…", null, true);
+      const safeExt = String(ext).replace(/^\.+/, "") || "png";
+      const upload = await this.uploadCloudFile(
+        `download-input/${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}.${safeExt}`,
+        filePath,
+      );
+      payload.dataFileID = upload.fileID;
+      payload.dataExt = safeExt;
+      console.log("[submitDownload] upload done", { fileID: upload.fileID });
     }
     if (text !== null && text !== undefined) payload.text = text;
     // 服务端合并分块并生成文件：内部进度不可知，显示 70% 加载动画
@@ -1999,12 +2058,13 @@ Page({
       const exportCanvas = this.renderExportCanvas(showCodes);
       this.updateExportProgress("正在生成图纸…", 10, false);
       const filename = `拼豆图纸-${suffix}-${this.cols}x${this.rows}.png`;
-      // 步骤2：画布转 base64（10240 为最大边长限制）
-      const dataUrl = await this.canvasToDataUrl(exportCanvas, 10240);
-      // 步骤3：分块上传 → 服务端生成 → 下载结果，全程由 onProgress 更新进度条
+      // 步骤2：画布直接导出本地 PNG 文件
+      const filePath = await this.canvasToTemp(exportCanvas, "png", 1);
+      // 步骤3：文件直传云存储 → 服务端生成 → 下载结果，全程由 onProgress 更新进度条
       const output = await this.submitDownload({
         filename,
-        dataUrl,
+        filePath,
+        ext: "png",
         onProgress: (label, percent, indeterminate) =>
           this.updateExportProgress(label, percent, indeterminate),
       });
@@ -2112,29 +2172,52 @@ Page({
 
   // ---------- 本地存档 ----------
   // 把图片对象缩放后序列化为本地文件，返回文件路径（失败返回空串）
+  // 把图片对象缩放后序列化为本地 JPG 文件（白底），返回文件路径（失败返回空串）
   cacheImageFile(prefix, image) {
-    if (!image || !image.width || !image.height) return "";
-    try {
-      const maxSide = 1600;
-      const scale = Math.min(1, maxSide / Math.max(image.width, image.height));
-      const width = Math.max(1, Math.round(image.width * scale));
-      const height = Math.max(1, Math.round(image.height * scale));
-      const canvas = this.createOffscreen(width, height);
-      const ctx = canvas.getContext("2d");
-      ctx.drawImage(image, 0, 0, width, height);
-      if (typeof canvas.toDataURL !== "function") return "";
-      const dataUrl = canvas.toDataURL("image/png");
-      const base64 = String(dataUrl || "").split(",")[1];
-      if (!base64) return "";
-      const filePath = `${wx.env.USER_DATA_PATH}/${prefix}.png`;
-      wx.getFileSystemManager().writeFileSync(filePath, base64, "base64");
-      return filePath;
-    } catch (error) {
-      console.warn("[draft] cache image failed", { prefix, error: error && error.message });
-      return "";
-    }
+    return new Promise((resolve) => {
+      if (!image || !image.width || !image.height) return resolve("");
+      try {
+        const maxSide = CACHE_MAX_SIDE;
+        const scale = Math.min(1, maxSide / Math.max(image.width, image.height));
+        const width = Math.max(1, Math.round(image.width * scale));
+        const height = Math.max(1, Math.round(image.height * scale));
+        const canvas = this.createOffscreen(width, height);
+        const ctx = canvas.getContext("2d");
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(0, 0, width, height);
+        ctx.drawImage(image, 0, 0, width, height);
+        const filePath = `${wx.env.USER_DATA_PATH}/${prefix}.jpg`;
+        wx.canvasToTempFilePath({
+          canvas,
+          fileType: "jpg",
+          quality: 0.85,
+          success: (res) => {
+            try {
+              const fs = wx.getFileSystemManager();
+              try {
+                fs.unlinkSync(filePath);
+              } catch {
+                // 目标不存在时忽略
+              }
+              fs.copyFileSync(res.tempFilePath, filePath);
+              resolve(filePath);
+            } catch (error) {
+              console.warn("[draft] copy cache failed", { prefix, error: error && error.message });
+              resolve("");
+            }
+          },
+          fail: (error) => {
+            console.warn("[draft] cache image failed", { prefix, error: error && error.message });
+            resolve("");
+          },
+        });
+      } catch (error) {
+        console.warn("[draft] cache image failed", { prefix, error: error && error.message });
+        resolve("");
+      }
+    });
   },
-  savePatternToStorage() {
+  async savePatternToStorage() {
     if (!this.cells.length) return;
     try {
       const payload = {
@@ -2152,12 +2235,12 @@ Page({
       };
       // 缓存原图：恢复后调整横向格数/颜色合并仍以原图为基准，避免越调越模糊
       if (this.originalImage && this.originalImage !== this._cachedOriginalRef) {
-        payload.originalImagePath = this.cacheImageFile("draft-original", this.originalImage);
+        payload.originalImagePath = await this.cacheImageFile("draft-original", this.originalImage);
         this._cachedOriginalRef = this.originalImage;
       }
       // 缓存预处理预览图（与原图不同才单独保存）
       if (this.image && this.image !== this.originalImage && this.image !== this._cachedPreviewRef) {
-        payload.previewImagePath = this.cacheImageFile("draft-preview", this.image);
+        payload.previewImagePath = await this.cacheImageFile("draft-preview", this.image);
         this._cachedPreviewRef = this.image;
       }
       wx.setStorageSync(PATTERN_STORAGE_KEY, payload);
@@ -2275,7 +2358,7 @@ Page({
                   const retry = createImage();
                   retry.onload = () => resolve(retry);
                   retry.onerror = () => resolve(null);
-                  retry.src = `data:image/png;base64,${res.data}`;
+                  retry.src = `data:${/\.png$/i.test(filePath) ? "image/png" : "image/jpeg"};base64,${res.data}`;
                 } catch {
                   resolve(null);
                 }
@@ -2308,7 +2391,7 @@ Page({
   clearSavedPattern() {
     wx.removeStorageSync(PATTERN_STORAGE_KEY);
     const fs = wx.getFileSystemManager();
-    ["draft-original.png", "draft-preview.png"].forEach((name) => {
+    ["draft-original.png", "draft-preview.png", "draft-original.jpg", "draft-preview.jpg"].forEach((name) => {
       try {
         fs.unlinkSync(`${wx.env.USER_DATA_PATH}/${name}`);
       } catch {
@@ -2418,9 +2501,13 @@ Page({
     let originalFileID = "";
     let previewFileID = "";
     if (withImages) {
-      const originalPath = this.originalImage ? this.cacheImageFile(`project-original-${project.id}`, this.originalImage) : "";
+      const originalPath = this.originalImage
+        ? await this.cacheImageFile(`project-original-${project.id}`, this.originalImage)
+        : "";
       const previewPath =
-        this.image && this.image !== this.originalImage ? this.cacheImageFile(`project-preview-${project.id}`, this.image) : "";
+        this.image && this.image !== this.originalImage
+          ? await this.cacheImageFile(`project-preview-${project.id}`, this.image)
+          : "";
       const uploadImage = (localPath, cloudName) =>
         localPath
           ? new Promise((resolve, reject) => {
@@ -2728,15 +2815,19 @@ Page({
     return filePath;
   },
 
-  uploadShareFile(localPath, cloudPath) {
+  uploadCloudFile(cloudPath, filePath) {
     return new Promise((resolve, reject) => {
       wx.cloud.uploadFile({
         cloudPath,
-        filePath: localPath,
+        filePath,
         success: resolve,
         fail: (err) => reject(new Error((err && err.errMsg) || "云存储上传失败")),
       });
     });
+  },
+
+  uploadShareFile(localPath, cloudPath) {
+    return this.uploadCloudFile(cloudPath, localPath);
   },
 
   // 创建当前图纸的分享快照：上传原图/预处理图/图纸 JSON 到暂存区，
@@ -2761,9 +2852,13 @@ Page({
     };
     const jsonPath = this.writeShareTempFile(project);
     const jsonUpload = await this.uploadShareFile(jsonPath, `share-staging/${stageId}.json`);
-    const originalPath = this.originalImage ? this.cacheImageFile(`share-original-${stageId}`, this.originalImage) : "";
+    const originalPath = this.originalImage
+      ? await this.cacheImageFile(`share-original-${stageId}`, this.originalImage)
+      : "";
     const previewPath =
-      this.image && this.image !== this.originalImage ? this.cacheImageFile(`share-preview-${stageId}`, this.image) : "";
+      this.image && this.image !== this.originalImage
+        ? await this.cacheImageFile(`share-preview-${stageId}`, this.image)
+        : "";
     const [origUpload, prevUpload] = await Promise.all([
       originalPath ? this.uploadShareFile(originalPath, `share-staging/${stageId}-original.png`) : Promise.resolve(null),
       previewPath ? this.uploadShareFile(previewPath, `share-staging/${stageId}-preview.png`) : Promise.resolve(null),
