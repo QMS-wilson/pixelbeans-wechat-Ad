@@ -55,11 +55,18 @@
 }
 
 .avatar-picker {
+  flex: none;
   width: 160rpx;
   height: 160rpx;
+  min-width: 160rpx;
+  min-height: 160rpx;
+  max-width: 160rpx;
+  max-height: 160rpx;
   margin: 0 auto;
   padding: 0;
+  border: none;
   border-radius: 50%;
+  box-sizing: border-box;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -67,7 +74,7 @@
   font-size: 24rpx;
   color: #64748b;
   background: #f1f5f9;
-  line-height: 1.4;
+  line-height: 1;
 }
 
 .avatar-picker::after {
@@ -75,9 +82,11 @@
 }
 
 .avatar-preview {
-  width: 100%;
-  height: 100%;
+  flex: none;
+  width: 160rpx;
+  height: 160rpx;
   border-radius: 50%;
+  display: block;
 }
 
 .nickname-input {
@@ -864,6 +873,11 @@
 
 .modal-card.wide {
   max-width: 720rpx;
+}
+
+.modal-card.profile-modal {
+  max-width: 480rpx;
+  padding: 28rpx 24rpx;
 }
 
 .modal-head {
