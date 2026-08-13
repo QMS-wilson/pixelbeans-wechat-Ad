@@ -54,6 +54,40 @@
   display: block;
 }
 
+.avatar-picker {
+  width: 160rpx;
+  height: 160rpx;
+  margin: 0 auto;
+  padding: 0;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  font-size: 24rpx;
+  color: #64748b;
+  background: #f1f5f9;
+  line-height: 1.4;
+}
+
+.avatar-picker::after {
+  border: none;
+}
+
+.avatar-preview {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+}
+
+.nickname-input {
+  min-height: 88rpx;
+  padding: 0 24rpx;
+  border-radius: 18rpx;
+  background: #f8fafc;
+  font-size: 26rpx;
+}
+
 .header-access {
   max-width: 340rpx;
   padding: 12rpx 22rpx;

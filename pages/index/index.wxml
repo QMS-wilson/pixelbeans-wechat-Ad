@@ -1,6 +1,6 @@
 <view class="page {{overlayOpen ? 'overlay-open' : ''}}">
   <view class="site-header">
-    <view class="brand">
+    <view class="brand" bindtap="openProfileModal">
       <view class="brand-mark">
         <image wx:if="{{profileReady}}" class="brand-avatar" src="{{avatarUrl}}" mode="aspectFill"></image>
         <text wx:else>PX</text>
@@ -295,6 +295,22 @@
       <button class="action-btn primary" disabled="{{adBusy}}" bindtap="showAdUnlock">看广告解锁</button>
       <text class="unlock-message {{unlockMessageType}}">{{unlockMessage}}</text>
       <button class="action-btn ghost" bindtap="closeUnlockModal">稍后再说</button>
+    </view>
+  </view>
+
+  <view class="overlay modal-overlay" wx:if="{{profileModalVisible}}" bindtap="closeProfileModal">
+    <view class="modal-card" catchtap="noop">
+      <view class="modal-head">
+        <text class="modal-title">设置头像与昵称</text>
+        <text class="modal-close" bindtap="closeProfileModal">×</text>
+      </view>
+      <button class="avatar-picker" open-type="chooseAvatar" bindchooseavatar="onChooseAvatar">
+        <image wx:if="{{avatarTemp}}" class="avatar-preview" src="{{avatarTemp}}" mode="aspectFill"></image>
+        <text wx:else>点击选择头像</text>
+      </button>
+      <input class="nickname-input" type="nickname" value="{{nicknameInput}}" bindinput="onNicknameInput" placeholder="请输入昵称" />
+      <button class="action-btn primary" disabled="{{!avatarTemp || !nicknameInput}}" bindtap="saveProfile">保存</button>
+      <button class="action-btn ghost" bindtap="closeProfileModal">暂不设置</button>
     </view>
   </view>
 
