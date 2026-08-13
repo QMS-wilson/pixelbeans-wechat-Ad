@@ -99,9 +99,6 @@ Page({
     profileReady: false,
     avatarUrl: "",
     nickname: "",
-    profileModalVisible: false,
-    avatarTemp: "",
-    nicknameInput: "",
   },
 
   onLoad(options) {
@@ -165,7 +162,6 @@ Page({
         this.restorePatternFromStorage();
       }
       this.loadAccessStatus();
-      this.autoPromptProfile();
     });
   },
 
@@ -306,7 +302,6 @@ Page({
       this.data.aiOverlayVisible ||
       this.data.preprocessVisible ||
       this.data.unlockModalVisible ||
-      this.data.profileModalVisible ||
       this.data.errorVisible ||
       this.data.csvPreviewVisible;
     const changed = open !== this.data.overlayOpen;
@@ -583,85 +578,6 @@ Page({
     } catch (error) {
       return false;
     }
-  },
-
-  // 打开小程序时弹出统一的授权提醒：授权后展示头像昵称，拒绝则保持原样
-  autoPromptProfile() {
-    if (this.profileReady || this._pageDestroyed || this._profilePrompted) return;
-    this._profilePrompted = true;
-    wx.showModal({
-      title: "授权提醒",
-      content: "是否允许获取您的头像和昵称？授权后将展示在页面顶部，拒绝后保持原样。",
-      confirmText: "允许",
-      cancelText: "拒绝",
-      success: (res) => {
-        if (res && res.confirm) {
-          this.openProfileModal();
-        }
-      },
-    });
-  },
-
-  openProfileModal() {
-    this.setData({
-      profileModalVisible: true,
-      avatarTemp: this.avatarUrl,
-      nicknameInput: this.nickname,
-    });
-    this.syncOverlayState();
-  },
-
-  closeProfileModal() {
-    this.setData({ profileModalVisible: false });
-    this.syncOverlayState();
-  },
-
-  onChooseAvatar(e) {
-    const avatarUrl = e.detail && e.detail.avatarUrl;
-    if (!avatarUrl) return;
-    this.setData({ avatarTemp: avatarUrl });
-  },
-
-  onNicknameInput(e) {
-    this.setData({ nicknameInput: (e.detail && e.detail.value) || "" });
-  },
-
-  // 把临时头像复制到本地用户目录，避免小程序重启后临时文件失效
-  persistAvatar(avatarUrl) {
-    try {
-      const fs = wx.getFileSystemManager();
-      const extMatch = String(avatarUrl).match(/\.(png|jpg|jpeg|webp)$/i);
-      const ext = extMatch ? extMatch[1].toLowerCase() : "png";
-      const dest = `${wx.env.USER_DATA_PATH}/avatar-${Date.now()}.${ext}`;
-      fs.copyFileSync(avatarUrl, dest);
-      return dest;
-    } catch (error) {
-      console.warn("[profile] persist avatar failed", error);
-      return "";
-    }
-  },
-
-  saveProfile() {
-    const avatarUrl = this.data.avatarTemp || "";
-    const nickname = (this.data.nicknameInput || "").trim();
-    if (!avatarUrl || !nickname) {
-      this.toast("请先选择头像并填写昵称");
-      return;
-    }
-    const savedAvatar = this.persistAvatar(avatarUrl);
-    this.avatarUrl = savedAvatar || avatarUrl;
-    this.nickname = nickname;
-    this.profileReady = true;
-    wx.setStorageSync(PROFILE_AVATAR_KEY, this.avatarUrl);
-    wx.setStorageSync(PROFILE_NICKNAME_KEY, nickname);
-    this.setData({
-      profileReady: true,
-      avatarUrl: this.avatarUrl,
-      nickname,
-      profileModalVisible: false,
-    });
-    this.syncOverlayState();
-    this.toast("已保存头像与昵称");
   },
 
   // 广告位未配置时返回 null，前端提示“即将上线”
