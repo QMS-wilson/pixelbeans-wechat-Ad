@@ -3,7 +3,7 @@
     <view class="brand" bindtap="openProfileModal">
       <view class="brand-mark">
         <image wx:if="{{profileReady}}" class="brand-avatar" src="{{avatarUrl}}" mode="aspectFill"></image>
-        <text wx:else>PX</text>
+        <image wx:else class="brand-logo" src="/assets/logo.png" mode="aspectFit"></image>
       </view>
       <view class="brand-text">
         <text class="brand-name" wx:if="{{profileReady}}">你好，{{nickname}}</text>
