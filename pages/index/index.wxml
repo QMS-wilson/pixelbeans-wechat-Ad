@@ -7,7 +7,7 @@
       </view>
       <view class="brand-text">
         <text class="brand-name" wx:if="{{profileReady}}">你好，{{nickname}}</text>
-        <text class="brand-name" wx:else>像素工坊</text>
+        <text class="brand-name" wx:else>清梦拼豆</text>
         <text class="brand-sub" wx:if="{{profileReady}}">请开始你的创意吧！</text>
         <text class="brand-sub" wx:else>Bead Pattern Lab</text>
       </view>

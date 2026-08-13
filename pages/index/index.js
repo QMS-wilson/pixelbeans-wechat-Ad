@@ -2890,7 +2890,7 @@ Page({
 
   onShareAppMessage() {
     const ready = Boolean(this.cells && this.cells.length) && !this.data.exportBusy && !this.data.aiOverlayVisible;
-    const fallback = { title: "拼豆图纸生成器 - 像素工坊", path: "/pages/index/index" };
+    const fallback = { title: "拼豆图纸生成器 - 清梦拼豆", path: "/pages/index/index" };
     if (!ready) return fallback;
     // 立即返回分享路径，快照在后台异步创建；接收方分享页会轮询等待生成完成
     const shareId = this.ensureShareSnapshot();
