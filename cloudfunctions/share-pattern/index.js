@@ -56,7 +56,11 @@ async function createShare(OPENID, event) {
     return { error: "Missing file", message: "缺少图纸文件。" };
   }
 
-  const shareId = `s${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+  // 优先使用调用方传入的 shareId（客户端先生成，分享菜单可立即返回链接）
+  const requestedId = String(id || "").trim();
+  const shareId = /^s[0-9a-z]{8,}$/i.test(requestedId)
+    ? requestedId
+    : `s${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
   const copyFile = async (fileID, filename) => {
     if (!fileID) return "";
     try {
@@ -137,9 +141,16 @@ async function getShare(event) {
     const res = await db.collection(SHARES_COLLECTION).doc(shareId).get();
     doc = res.data || null;
   } catch (error) {
+    // 记录不存在：分享者可能刚点击分享，快照还在后台创建中
+    if (/^s[0-9a-z]{8,}$/i.test(shareId)) {
+      return { pending: true };
+    }
     return { error: "Share not found", message: "分享不存在或已失效。" };
   }
   if (!doc) {
+    if (/^s[0-9a-z]{8,}$/i.test(shareId)) {
+      return { pending: true };
+    }
     return { error: "Share not found", message: "分享不存在或已失效。" };
   }
   if (doc.expiresAt && new Date(doc.expiresAt).getTime() < Date.now()) {

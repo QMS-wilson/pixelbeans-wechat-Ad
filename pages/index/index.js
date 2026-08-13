@@ -2702,7 +2702,7 @@ Page({
 
   // 创建当前图纸的分享快照：上传原图/预处理图/图纸 JSON 到暂存区，
   // 云函数 share-pattern 复制到 shares/ 目录并生成分享链接（接收方可直接查看）
-  async createShareSnapshot() {
+  async createShareSnapshot(shareId = "") {
     if (!this.cells.length) return null;
     const stageId = `stage${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
     const project = {
@@ -2731,7 +2731,7 @@ Page({
     ]);
     const res = await callFunction("share-pattern", {
       action: "create",
-      id: stageId,
+      id: shareId || stageId,
       name: project.name,
       savedAt: project.savedAt,
       cols: project.cols,
@@ -2758,26 +2758,44 @@ Page({
     const ready = Boolean(this.cells && this.cells.length) && !this.data.exportBusy && !this.data.aiOverlayVisible;
     const fallback = { title: "拼豆图纸生成器 - 像素工坊", path: "/pages/index/index" };
     if (!ready) return fallback;
-    // 基础库 2.12.0+ 支持 onShareAppMessage 返回 Promise：先创建分享快照，再返回带 shareId 的路径
-    return new Promise((resolve) => {
-      this.createShareSnapshot()
-        .then((result) => {
-          resolve({
-            title: `拼豆图纸 ${this.cols}x${this.rows}，快来查看！`,
-            path: result.path,
-          });
-        })
-        .catch((error) => {
-          console.error("[share] create snapshot failed", error);
-          const shareError = (error && error.message) || "";
-          if (/FUNCTION_NOT_FOUND|FunctionName parameter could not be found/.test(shareError)) {
-            this.toast("分享功能未部署：请先部署 share-pattern 云函数");
-          } else {
-            this.toast("分享创建失败，请重试");
-          }
-          resolve(fallback);
-        });
-    });
+    // 立即返回分享路径，快照在后台异步创建；接收方分享页会轮询等待生成完成
+    const shareId = this.ensureShareSnapshot();
+    if (!shareId) return fallback;
+    return {
+      title: `拼豆图纸 ${this.cols}x${this.rows}，快来查看！`,
+      path: `/pages/share/share?shareId=${shareId}`,
+    };
+  },
+
+  // 同一图纸只创建一个分享快照；未完成时复用同一个 pending shareId
+  ensureShareSnapshot() {
+    const fingerprint = `${this.cols}x${this.rows}:${this.cells.length}:${this.sourceFingerprint || ""}`;
+    if (this._shareId && this._shareFingerprint === fingerprint) return this._shareId;
+    if (this._shareInFlight) return this._shareInFlightId || this._shareId || "";
+    const shareId = `s${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+    this._shareInFlight = true;
+    this._shareInFlightId = shareId;
+    this.createShareSnapshot(shareId)
+      .then((result) => {
+        if (result && result.success && result.shareId === shareId) {
+          this._shareId = shareId;
+          this._shareFingerprint = fingerprint;
+        }
+      })
+      .catch((error) => {
+        console.error("[share] background snapshot failed", error);
+        const shareError = (error && error.message) || "";
+        if (/FUNCTION_NOT_FOUND|FunctionName parameter could not be found/.test(shareError)) {
+          this.toast("分享功能未部署：请先部署 share-pattern 云函数");
+        } else {
+          this.toast("分享创建失败，请重试");
+        }
+      })
+      .finally(() => {
+        this._shareInFlight = false;
+        this._shareInFlightId = "";
+      });
+    return shareId;
   },
 
   // 被分享者从分享页点击「导入并继续编辑」：把分享图纸载入当前画布

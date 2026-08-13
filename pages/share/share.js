@@ -81,7 +81,16 @@ Page({
       return;
     }
     try {
-      const res = await callFunction("share-pattern", { action: "get", shareId: this.shareId });
+      // 分享者点击分享后快照在后台异步生成，这里轮询等待（最多约 20 秒）
+      let res = null;
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        res = await callFunction("share-pattern", { action: "get", shareId: this.shareId });
+        if (!(res && res.pending)) break;
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+      }
+      if (res && res.pending) {
+        throw new Error("分享内容还在生成中，请让分享者重试。");
+      }
       if (!res || !res.success || !res.share) {
         throw new Error((res && res.message) || "分享不存在或已失效。");
       }
